@@ -15,7 +15,7 @@ files() {
   find . -type f \
     ! -path './node_modules/*' ! -path './media/*' ! -path './inbox/*' \
     ! -name 'qqbot.log*' ! -name '.state.json*' ! -name '.intents.json' \
-    ! -name '.run.pid' ! -name 'credentials.json' ! -name 'groups.json' \
+    ! -name '.run.pid' ! -name 'credentials.json' ! -name 'credentials.json.bak-*' ! -name 'groups.json' \
     ! -name '.manifest.sha256' ! -name '.manifest.old' ! -name 'bind.html' \
     ! -name 'qr.png' ! -name '.bind.out' ! -name '*.tmp' \
     ! -name '.tmp-input.json' ! -name '.probe*.mjs' ! -name '.whoami.mjs' \
