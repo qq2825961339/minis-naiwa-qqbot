@@ -71,12 +71,13 @@ node run.mjs --once       # 打印当前 agent 配置并退出
 人格文件放在 `persona/`，`config.json` 的 `agent.persona` 指定用哪个（不含 `.md`）：
 
 ```json
-"agent": { "persona": "fengge" }
+"agent": { "persona": "human" }
 ```
 
-- **名字永远叫「奶蛙」**，人格只改说话方式和思维模型
+- **名字永远叫「奶蛙」**，人格只改说话方式和定位
+- 留空也能用：`persona/` 下只有一个 `.md` 时自动启用
 - 通过 `--system-file` 注入，不走命令行参数（避免长度限制）
-- 当前人格：`fengge.md`（峰哥视角，来源 YixiaJack/feng-ge-skill）
+- 当前人格：`human.md`（普通人，随性、无标点、长短跟着话题走）
 - 新增人格见 `persona/README.md`
 
 ### 模型配置
