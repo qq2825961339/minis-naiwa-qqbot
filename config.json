@@ -1,0 +1,24 @@
+{
+  "agent": {
+    "mode": "cli",
+    "model": "",
+    "maxTokens": 4096,
+    "historyTurns": 20,
+    "systemPrompt": "",
+    "inboxSession": "B93F27F3-9FF9-4EF5-ABEF-7B31DE9A7F04",
+    "loopPrompt": "",
+    "defaultMode": "cli",
+    "modelPrefer": "vision",
+    "persona": "human"
+  },
+  "access": {
+    "defaultRequireMention": false,
+    "allowFrom": [],
+    "blockFrom": [],
+    "groups": {}
+  },
+  "groupIsolation": "group",
+  "limit": {
+    "textChunk": 1800
+  }
+}

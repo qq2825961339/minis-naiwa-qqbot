@@ -1,0 +1,22 @@
+{
+  "agent": {
+    "mode": "cli",
+    "model": "",
+    "maxTokens": 2048,
+    "historyTurns": 20,
+    "systemPrompt": "你是运行在 QQ 上的助手。回答要简洁、直接、口语化，避免长表格和复杂排版（QQ 不渲染 Markdown 表格）。",
+    "inboxSession": "",
+    "loopPrompt": "",
+    "persona": "human"
+  },
+  "access": {
+    "defaultRequireMention": true,
+    "allowFrom": [],
+    "blockFrom": [],
+    "groups": {}
+  },
+  "groupIsolation": "group",
+  "limit": {
+    "textChunk": 1800
+  }
+}

@@ -1,0 +1,23 @@
+# 凭证与运行状态 —— 绝不提交
+credentials.json
+credentials.json.bak-*
+.state.json
+.state.json.tmp
+.state.json.corrupt-*
+.intents.json
+groups.json
+.run.pid
+
+# 日志与媒体
+qqbot.log*
+media/
+inbox/
+*.tmp
+.tmp-input.json
+keepalive.out
+
+# 生成物
+qr.png
+bind.html
+.bind.out
+node_modules/
