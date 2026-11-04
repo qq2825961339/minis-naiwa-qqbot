@@ -724,7 +724,15 @@ export class AgentBridge {
     const limit = this.config.limit?.textChunk ?? 1800;
 
     // 模型用 ||| 标示"分条发送"，模拟真人连发几条微信的节奏
-    const parts = String(text).split(/\s*\|\|\|\s*/).map((s) => s.trim()).filter(Boolean);
+    let parts = String(text).split(/\s*\|\|\|\s*/).map((s) => s.trim()).filter(Boolean);
+    // 硬限制：最多两条，超出的合并进第二条，避免模型不听话连发
+    const MAX = this.config.limit?.maxBubbles ?? 2;
+    if (parts.length > MAX) {
+      const head = parts.slice(0, MAX - 1);
+      const merged = parts.slice(MAX - 1).join(' ');
+      parts = [...head, merged];
+      this.log(`[out] 分条超过 ${MAX} 条，已合并`);
+    }
     const bubbles = parts.length > 1 ? parts : [String(text)];
 
     let seq = 1;
