@@ -9,7 +9,7 @@
     "persona": "human"
   },
   "access": {
-    "defaultRequireMention": true,
+    "defaultRequireMention": false,
     "allowFrom": [],
     "blockFrom": [],
     "groups": {}
