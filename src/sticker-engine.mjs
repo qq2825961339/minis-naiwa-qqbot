@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { searchEmoji } from './fabiaoqing.mjs';   // 发表情站，图源比搜狗准得多
+import { searchEmoji } from './qqbiaoqing.mjs';    // 图床无防盗链，QQ 能直接抓图 + 真表情包
 
 const DEFAULT = {
   enabled: true,
