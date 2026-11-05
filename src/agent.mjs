@@ -527,42 +527,38 @@ export class AgentBridge {
 
     if (video) {
       try {
-        // 先报一句标题，让用户知道这是什么视频
-        const line = String(video.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-        if (line) {
-          // 标题固定用文字，换着说法
-          const tpl = [`找到个「${line}」`, `这个「${line}」`, `「${line}」这个还行`, `就这个「${line}」`];
-          await this.sendLong(evt, tpl[Math.floor(Math.random() * tpl.length)]);
-        }
+        // 先发视频，成功了再报标题（避免用户看到标题却等不到视频）
         let sent = false;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < 5; attempt++) {
           try {
             await this.sendMedia(evt, video.url, 2);   // 2 = 视频
             sent = true;
             break;
           } catch (e) {
             this.log(`[video] 第 ${attempt + 1} 次发送失败: ${e.message.slice(0, 80)}`);
-            if (attempt >= 2) break;
-            // 先跟用户说一声
-            const FAIL = ['这个发不出来 换一个', '加载失败 我再找个', '这个卡住了 换下一个'];
-            await this.sendLong(evt, FAIL[Math.floor(Math.random() * FAIL.length)]).catch(() => {});
-            // 换下一个再试
+            if (attempt >= 4) break;   // 试满 5 次才放弃
             const alt = await findVideo(kwUsed, { sent: c.sentVideos || [] }).catch(() => null);
-            if (!alt) {
-              await this.sendLong(evt, '找的几个都发不出来 换个关键词试试').catch(() => {});
-              break;
-            }
+            if (!alt) break;
             video = alt;
             c.sentVideos = [...(c.sentVideos || []), alt.bvid].slice(-20);
-            const line2 = String(alt.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-            if (line2) await this.sendLong(evt, `这个「${line2}」`).catch(() => {});
             await sleep(1200);
           }
         }
         if (!sent) {
           this.log('[video] 多次失败，放弃');
-          await this.sendLong(evt, '视频一直发不出来 待会儿再试').catch(() => {});
+          const NOPE = [
+            '视频找不到 要不换个关键词',
+            '没找着能发的 你说个别的',
+            '找不到 换一个词吧',
+          ];
+          await this.sendLong(evt, NOPE[Math.floor(Math.random() * NOPE.length)]).catch(() => {});
           return;
+        }
+        // 视频已送达 → 再报标题
+        const line = String(video.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        if (line) {
+          const tpl = [`给「${line}」`, `这个「${line}」`, `「${line}」`, `喏 「${line}」`];
+          await this.sendLong(evt, tpl[Math.floor(Math.random() * tpl.length)]).catch(() => {});
         }
         this.log(`[video] 已发送 ${video.title}`);
         // 视频发完就结束，不再走模型（否则模型会瞎回「我不会找视频」）
