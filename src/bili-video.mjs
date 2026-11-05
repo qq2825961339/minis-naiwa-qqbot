@@ -96,32 +96,18 @@ export async function findVideo(keyword, opts = {}) {
   return null;
 }
 
-/** 判定用户是不是在要视频 */
+/** 判定用户是不是在要视频（只认指令） */
 export function wantsVideo(text) {
-  return /(来个|发个|想看|找个|搜个|放个|来段|有没有)[^\s，。,!！]{0,10}视频/.test(String(text||''))
-    || /(来段|来个)[^\s，。,!！]{1,8}的?$/.test(String(text||''));
+  const t=String(text||'').trim();
+  return /^\/找视频$/.test(t) || /^\/找视频\s+[^\s，。,!！？?]{1,12}$/.test(t) || /^\/换视频$/.test(t);
 }
 
-/**
- * 从「发个可爱猫咪视频」里扣出搜索词 → 「可爱猫咪」
- * 扣不到就返回空字符串，由调用方兜底
- */
+/** 从「来个视频 猫」里抠出搜索词 → 「猫」，没跟就空（随机） */
 export function extractVideoKeyword(text) {
-  const t = String(text || '');
-  // 1. 去掉开头的动词和结尾的「视频」
-  const m = t.match(/(?:来个|发个|想看|找个|搜个|放个|来段|有没有)\s*([^\s，。,!！]{0,12}?)\s*的?\s*视频/);
-  if (m && m[1]) {
-    let kw = m[1].replace(/^[的个一段]/, '').trim();
-    // 去掉常见口头词，剩下的才是内容词
-    kw = kw.replace(/^(给我|帮我|你|来|点|些|这种|那种|个|一)/g, '').replace(/^(点|些|的)/,'').trim();
-    if (kw) return kw.slice(0, 10);
-  }
-  // 2. 整句话里找名词片段（去掉动词/称呼）
-  const cleaned = t
-    .replace(/奶蛙|你|我|吧|呢|啊|呀/g, '')
-    .replace(/来个|发个|想看|找个|搜个|放个|来段|有没有|视频|一个|一段/g, '')
-    .trim();
-  return cleaned.slice(0, 10);
+  const t = String(text || '').trim();
+  const m = t.match(/^\/找视频\s*([^\s，。,!！？?]{1,12})/);
+  if (m && m[1]) return m[1].replace(/的视频$|视频/g, '').trim();
+  return '';
 }
 
 // 自测：node bili-video.mjs 猫
