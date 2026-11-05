@@ -98,6 +98,7 @@ export async function findSong(keyword, opts = {}) {
 
   // 没给关键词就走「随便听听」的歌单
   let list = [];
+  let plName = '';
   if (hasKw) {
     list = await searchSong(keyword, { limit: cfg.searchLimit });
   } else {
@@ -111,7 +112,7 @@ export async function findSong(keyword, opts = {}) {
     if (!u) continue;
     if (u.mb && u.mb > cfg.maxMB) continue;
     if (u.mb && u.mb < cfg.minMB) continue;   // 试听片段，跳过换下一首
-    return { ...s, ...u };
+    return { ...s, ...u, playlist: plName };
   }
   return null;
 }
