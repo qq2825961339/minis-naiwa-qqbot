@@ -72,16 +72,18 @@ export class QQApi {
   }
 
   /** 私聊发送：msg_id → 被动回复；不传 → 主动消息 */
-  sendC2C(openid, content, msgId, msgSeq) {
+  sendC2C(openid, content, msgId, msgSeq, refId) {
     const body = { content, msg_type: 0, msg_id: msgId };
     if (msgSeq) body.msg_seq = msgSeq;
     return this.request('POST', `/v2/users/${openid}/messages`, { body });
   }
 
   /** 群聊发送 */
-  sendGroup(groupOpenid, content, msgId, msgSeq) {
+  sendGroup(groupOpenid, content, msgId, msgSeq, refId) {
     const body = { content, msg_type: 0, msg_id: msgId };
     if (msgSeq) body.msg_seq = msgSeq;
+    // 引用回复：refId 来自消息事件 message_scene.ext 里的 msg_idx
+    if (refId) body.message_reference = { message_id: refId };
     return this.request('POST', `/v2/groups/${groupOpenid}/messages`, { body });
   }
 
@@ -116,6 +118,67 @@ export class QQApi {
     return this.request('POST', `/v2/groups/${groupOpenid}/messages`, {
       body: { msg_type: 7, media: { file_info: fileInfo }, msg_id: msgId, msg_seq: msgSeq },
     });
+  }
+
+
+  /** ARK 卡片（msg_type=3）。单聊/群聊都走同一个结构 */
+  sendArkC2C(openid, ark, msgId, msgSeq) {
+    const body = { msg_type: 3, ark };
+    if (msgId) body.msg_id = msgId;
+    if (msgSeq) body.msg_seq = msgSeq;
+    return this.request('POST', `/v2/users/${openid}/messages`, { body });
+  }
+
+  sendArkGroup(groupOpenid, ark, msgId, msgSeq) {
+    const body = { msg_type: 3, ark };
+    if (msgId) body.msg_id = msgId;
+    if (msgSeq) body.msg_seq = msgSeq;
+    return this.request('POST', `/v2/groups/${groupOpenid}/messages`, { body });
+  }
+
+  /** 生成「文本 + 缩略图」音乐卡片（模板 24） */
+  static musicArk({ title, desc, img, link, subtitle = '网易云音乐' }) {
+    return {
+      template_id: 24,
+      kv: [
+        { key: '#DESC#', value: '音乐' },
+        { key: '#PROMPT#', value: '奶蛙点歌' },
+        { key: '#TITLE#', value: String(title || '').slice(0, 30) || '未知歌曲' },
+        { key: '#METADESC#', value: String(desc || '').slice(0, 40) },
+        { key: '#IMG#', value: img || 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg' },
+        { key: '#LINK#', value: link || 'https://music.163.com' },
+        { key: '#SUBTITLE#', value: subtitle },
+      ],
+    };
+  }
+
+
+  /** 图文卡片（msg_type=8，不需 ARK 权限） */
+  sendCardC2C(openid, card, msgId, msgSeq) {
+    const body = { msg_type: 8, card };
+    if (msgId) body.msg_id = msgId;
+    if (msgSeq) body.msg_seq = msgSeq;
+    return this.request('POST', `/v2/users/${openid}/messages`, { body });
+  }
+
+  sendCardGroup(groupOpenid, card, msgId, msgSeq) {
+    const body = { msg_type: 8, card };
+    if (msgId) body.msg_id = msgId;
+    if (msgSeq) body.msg_seq = msgSeq;
+    return this.request('POST', `/v2/groups/${groupOpenid}/messages`, { body });
+  }
+
+  /** 音乐用图文卡片 */
+  static musicCard({ title, desc, img, link }) {
+    return {
+      type: 'tuwen',
+      content: {
+        title: String(title || '').slice(0, 50) || '未知歌曲',
+        description: String(desc || '').slice(0, 200),
+        url: link || 'https://music.163.com',
+        pic_url: img || 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg',
+      },
+    };
   }
 
   /** 生成"正在输入"（频道用） */
