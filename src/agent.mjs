@@ -330,6 +330,10 @@ export class AgentBridge {
     // 语音：模型用 ♪ 标记（纯语音 / 文字+语音），否则按频率兜底
     const hasImage = (evt.attachments || []).some((a) => /^image\//.test(a.contentType || ''));
     const hasVoiceIn = (evt.attachments || []).some((a) => /voice|silk|amr|audio/i.test(a.contentType || ''));
+    // 这几个变量在下面多处引用，必须先声明（let 有暂时性死区）
+    let video = null;
+    let song = null;
+    let kwUsed = '';
     let voiceFile = null;
     let speech = '';
     try {
@@ -374,11 +378,8 @@ export class AgentBridge {
       this.markDirty();
     }
     // 视频：只有明确要求才发（体积大，不能随便发）
-    let video = null;
-    let kwUsed = '';
 
     // ---------- 音乐 ----------
-    let song = null;
     const askMusic = this.config.access?.music?.enabled !== false && wantsMusic(text);
     const nextMusic = !askMusic && c.lastSong && wantsNextMusic(text);
     if (askMusic || nextMusic) {
