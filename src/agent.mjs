@@ -256,7 +256,7 @@ export class AgentBridge {
     }
     if (!text && !(evt.attachments || []).length) return;
 
-    this.log(`[in] ${evt.scene} user=${evt.userId} peer=${evt.peerId} len=${text.length} att=${(evt.attachments || []).length} ref=${evt.refIdx ? '有' : '无'}`);
+    this.log(`[in] ${evt.scene} user=${evt.userId} peer=${evt.peerId} len=${text.length} att=${(evt.attachments || []).length} ref=${evt.refIdx ? '有' : '无'} text=${JSON.stringify(String(text).slice(0, 40))}`);
     if (evt.scene === 'group' && this.config.agent?.debugGroup) {
       try { fs.appendFileSync(path.join(this.here, 'group-raw.log'), JSON.stringify({ at: Date.now(), scene: evt.raw_data?.message_scene }) + '\n'); } catch {}
     }
@@ -514,9 +514,13 @@ export class AgentBridge {
       try {
         await this.sendMedia(evt, song.url, 3);
         this.log(`[music] 已发送 ${song.name} ${song.artist}`);
+        c.history.push({ role: 'assistant', content: `[音乐] ${song.name} - ${song.artist}` });
+        this.markDirty();
+        this.saveState();
       } catch (e) {
         this.log(`[music] 发送失败: ${e.message}`);
       }
+      return;
     }
 
     if (video) {
@@ -530,9 +534,14 @@ export class AgentBridge {
         }
         await this.sendMedia(evt, video.url, 2);   // 2 = 视频
         this.log(`[video] 已发送 ${video.title}`);
+        // 视频发完就结束，不再走模型（否则模型会瞎回「我不会找视频」）
+        c.history.push({ role: 'assistant', content: `[视频] ${video.title}` });
+        this.markDirty();
+        this.saveState();
       } catch (e) {
         this.log(`[video] 发送失败: ${e.message}`);
       }
+      return;
     }
 
     if (voiceFile) {
