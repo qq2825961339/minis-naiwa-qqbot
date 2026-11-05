@@ -6,7 +6,8 @@
     "systemPrompt": "",
     "defaultMode": "cli",
     "modelPrefer": "vision",
-    "persona": "human"
+    "persona": "human",
+    "debugGroup": false
   },
   "access": {
     "defaultRequireMention": false,
@@ -14,7 +15,7 @@
     "blockFrom": [],
     "groups": {},
     "chatter": {
-      "enabled": false,
+      "enabled": true,
       "groupReplyRate": 0.25,
       "groupIdleReplyRate": 0.65,
       "burstCooldownMs": 45000,
@@ -28,6 +29,33 @@
       "maxSizeKB": 400,
       "groupOnlyWhenMentioned": false,
       "autoFallback": true
+    },
+    "voice": {
+      "enabled": true,
+      "voice": "zh-CN-YunxiaNeural",
+      "rate": "+8%",
+      "pitch": "+0Hz",
+      "gain": 2.2,
+      "everyN": 3,
+      "maxChars": 60,
+      "moodTrigger": true,
+      "moodChance": 0.5,
+      "imageVoice": true
+    },
+    "groupJudge": {
+      "enabled": true,
+      "imageAlwaysReply": true,
+      "busyChance": 0.3,
+      "quoteInGroup": false
+    },
+    "video": {
+      "enabled": true,
+      "titleVoice": false,
+      "leadVoiceChance": 0.3
+    },
+    "music": {
+      "enabled": true,
+      "leadVoiceChance": 0.3
     }
   },
   "groupIsolation": "group",
