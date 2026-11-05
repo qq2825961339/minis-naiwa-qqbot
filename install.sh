@@ -20,17 +20,43 @@ fi
 
 # 2) Python 依赖（TTS 用的 edge-tts）
 if command -v python3 >/dev/null 2>&1; then
+  PYLIB=$(python3 -c "import sysconfig;print(sysconfig.get_paths()['purelib'])" 2>/dev/null)
+
+  # 2a) edge-tts 本体：先试离线包
   if ! python3 -c "import edge_tts" 2>/dev/null; then
     if [ -f vendor/py-deps.tar.gz ]; then
-      echo "[2/3] 解压 TTS 依赖…"
-      PYLIB=$(python3 -c "import sysconfig;print(sysconfig.get_paths()['purelib'])")
-      tar -xzf vendor/py-deps.tar.gz -C "$PYLIB"
-    else
-      echo "[2/3] 没有离线包，联网安装 edge-tts…"
-      pip install edge-tts 2>/dev/null || apk add py3-pip >/dev/null 2>&1 && pip install edge-tts
+      echo "[2/3] 解压 edge-tts 离线包…"
+      tar -xzf vendor/py-deps.tar.gz -C "$PYLIB" 2>/dev/null
     fi
-  else
-    echo "[2/3] edge-tts 已装，跳过"
+  fi
+
+  # 2b) 系统级依赖 aiohttp / certifi：离线包带不动，缺了就从 apk 装
+  MISS=""
+  python3 -c "import aiohttp" 2>/dev/null || MISS="$MISS aiohttp"
+  python3 -c "import certifi" 2>/dev/null || MISS="$MISS certifi"
+  if [ -n "$MISS" ]; then
+    echo "[2/3] 缺少$MISS，从 apk 安装…"
+    apk add --no-cache py3-aiohttp py3-certifi >/dev/null 2>&1 \
+      || apk add --no-cache aiohttp certifi >/dev/null 2>&1 \
+      || echo "    ⚠️ apk 安装失败，试着用 pip"
+  fi
+
+  # 2c) 最终兜底：pip
+  if ! python3 -c "import edge_tts" 2>/dev/null; then
+    echo "[2/3] 离线包无效，联网安装…"
+    (pip install --no-deps edge-tts 2>/dev/null || pip install edge-tts 2>/dev/null) \
+      && echo "    ✅ pip 安装成功" \
+      || echo "    ❌ 安装失败：语音功能不可用（其他功能不受影响）"
+  fi
+
+  if python3 -c "import edge_tts" 2>/dev/null; then
+    # 端到端验一次，别只看 import
+    if python3 -c "import edge_tts, asyncio; asyncio.run(edge_tts.Communicate('你好', 'zh-CN-YunxiaNeural').save('/tmp/.ttscheck.mp3'))" 2>/dev/null && [ -s /tmp/.ttscheck.mp3 ]; then
+      echo "[2/3] edge-tts 就绪（已实测合成）"
+      rm -f /tmp/.ttscheck.mp3
+    else
+      echo "[2/3] edge-tts 已装，但合成失败（可能没网或接口变动）"
+    fi
   fi
 else
   echo "[2/3] 没有 python3，语音功能不可用"
