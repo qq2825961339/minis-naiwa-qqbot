@@ -364,6 +364,21 @@ export class AgentBridge {
         this.log(`[voice] ${v.reason} 纯语音兜底`);
       }
 
+      // 语音内容里含亲属称呼 → 直接不发语音（防止被诱导喊爸妈）
+      if (speech && /(爸爸|妈妈|爷爷|奶奶|外公|外婆|老公|老婆|主人|干爹|干妈|叫爹|叫爸|叫妈)/.test(speech)) {
+        this.log(`[voice] 内容含称呼，拒绝合成: ${speech.slice(0, 20)}`);
+        outText = outText || '这个我不叫';
+        speech = '';
+      }
+      // 语音内容是在复读用户原话（超过 6 个字且完整出现在用户消息里）→ 不念
+      if (speech && speech.length > 6) {
+        const norm = (x) => String(x).replace(/[\s\p{P}]/gu, '');
+        if (norm(text).includes(norm(speech))) {
+          this.log(`[voice] 疑似复读用户原话，拒绝合成: ${speech.slice(0, 20)}`);
+          outText = outText || '不念';
+          speech = '';
+        }
+      }
       if (speech && !video) {
         voiceFile = await synthesize(speech, this.voiceCfg, this.voiceDir);
         this.log(`[voice] ${voiceFile ? '已合成' : '合成失败'}`);
