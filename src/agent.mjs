@@ -714,6 +714,16 @@ export class AgentBridge {
       const msg = String(e.stderr || e.message || '');
       // 把子进程真实报错写进日志，否则只剩一句 Command failed 查不出原因
       this.log(`[model] 失败 stdout=${(e.stdout || '').slice(0, 300)} stderr=${(e.stderr || '').slice(0, 500)} code=${e.code}`);
+      // 模型 ID 失效（Minis 里重配过模型，UUID 变了）→ 强制重选一次再试
+      if (/not found|no such model|invalid model/i.test(msg + (e.stdout || ''))) {
+        this.log('[model] 模型 ID 失效，重新选择…');
+        const sel2 = this.config.agent?.model
+          ? { entryId: this.config.agent.model, name: this.config.agent.model }
+          : await this.selectModel(true);
+        const args2 = args.map((a, i, arr) => (arr[i - 1] === '--model' ? sel2.entryId : a));
+        const r2 = await execFileP('minis-model-use', args2, { maxBuffer: 32 * 1024 * 1024, timeout: 180_000 });
+        return this.extractText(r2.stdout);
+      }
       // 415 / Unsupported Media：模型不收这张图。去掉图片用文字重试一次，别把错误抛给用户
       if (multimodal && /415|Unsupported Media/i.test(msg)) {
         this.log('[vision] 模型拒收该图片（415），改用文字描述重试');
