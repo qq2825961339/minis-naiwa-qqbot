@@ -140,29 +140,82 @@ cd /var/minis/skills/minis-naiwa-qqbot && nohup node run.mjs > /dev/null 2>&1 &
 | 聊天 `cli` | 1~3 秒 | 纯对话 + 看图（多模态）+ OCR |
 | 任务 `sessions` | 6~10 秒 | 读写文件、执行命令、联网 |
 
+
+## 一键安装与启动（推荐）
+
+```sh
+cd /var/minis/skills/minis-naiwa-qqbot
+./install.sh     # 解压离线依赖（vendor/ 里带了 node_modules 和 edge-tts，不用联网）
+./start.sh       # 没绑定就自动出二维码，扫完自动上线并保活
+```
+
+### `start.sh` 的行为
+
+1. 检查 `credentials.json` 是否存在 **且有效**（跑一次 `run.mjs --once` 验证）
+2. 无效 → 调 `bind.mjs --png` **在当前任务里生成二维码并阻塞等待扫码**
+3. 扫码成功 → `credentials.json` 自动写入
+4. 直接 `exec ./keepalive.sh run forever` 上线并保活
+
+**不要手动分步执行**（先 bind、再 run、再保活）。`start.sh` 已经把这三步串成一条线，
+扫码完自动接管，中途不会掉出任务。
+
+### 离线依赖
+
+| 文件 | 内容 |
+|---|---|
+| `vendor/node_modules.tar.gz` | `@tencent-connect/qqbot-connector` / `qrcode` / `ws`，约 480KB |
+| `vendor/py-deps.tar.gz` | `edge_tts` + `tabulate`，约 134KB，解到 python 的 site-packages |
+
+`install.sh` 会先试离线包，没有再走 `npm install` / `pip install`。
+
 ## 保活（利用 Minis 的 Agent 任务特性）
 
 `background.enhanced` / `locationTracking` 保的是「**Minis 正在执行的一轮 Agent 任务**」。
 所以只要**让一轮任务不结束**，App 就有后台时间片，`node run.mjs` 作为这一轮的子进程随之存活。
 
-### ⚠️ 触发规则
+> 保活是收尾的**默认动作**，不是可选项，任何时候都不需要用户确认。
 
-**只要 qqbot 上线，本轮最后一条消息必须是保活任务。** 不需要用户额外授权，不要等到用户开口。
+### ⚠️ 铁律：任何情况下，结尾自动保活，不询问
 
-> ⛔ **禁止询问「要不要开启保活」「需要我发保活吗」之类的问题。** 这是默认收尾动作，直接执行。
-> 唯一需要说的是结果播报：「这一轮不会返回，要再说话需先点停止」。
+**只要本轮碰过 qqbot，最后一条操作就是保活，不许问、不许跳过、不许设限时。**
 
-流程固定：
+```sh
+cd /var/minis/skills/minis-naiwa-qqbot && ./keepalive.sh run forever
+```
 
-1. 启动或修复完 qqbot
-2. 把该交代的事全部说完（状态报告、提醒、下一步）
-3. **最后**发出常驻保活命令：`./keepalive.sh run forever`（不加 `&`、不用 `setsid`）
+不加 `&`、不加 `setsid`、不加 `timeout`。命令挂住不返回就对了。
 
-发出前必须告知用户：**这一轮不会返回**，要再说话需先点「停止」；点停止会带走进程树，保活随之失效。
+### ⚠️ 保活的根本局限（必须先说清楚）
 
-例外：本轮只是查询/答疑，没有重启服务，则不必发保活（之前那轮应该还挂着）。
+保活靠的是「**本轮 Agent 任务不结束**」，所以：
 
-临时排障时可以用 `setsid ... &` 让进程先跑起来，但**本轮收尾前必须转成常驻形式**。
+| 情况 | 结果 |
+|---|---|
+| 任务一直挂着 | 进程有保护，App 不回收 ✅ |
+| **用户点「停止」** | **整棵进程树被杀，保活和 run.mjs 一起消失** ❌ |
+| App 被系统杀死 | 一起消失 ❌ |
+| 用 `setsid` 脱离 | PPID=1，停止杀不掉，但**没有任务保护，照样冻结** ❌ |
+
+**「用户点停止后进程仍然存活」做不到**——停止必然带走整棵进程树。
+
+### 保活期间的自检（任务不会结束，但进程会掉）
+
+保活不等于永不掉线。`run.mjs` 崩了 `keepalive.sh` 会 5 秒重启，但整个 iSH 被系统回收时仍然会断。
+
+所以**每一轮被唤起时，第一件事就是查进程**：
+
+```sh
+ps -o pid,ppid,args | grep -E '[k]eepalive|[r]un.mjs'
+```
+
+| 看到的 | 判断 | 动作 |
+|---|---|---|
+| `keepalive.sh` + PPID 不是 1 | 真保活 | 正常，继续 |
+| 只有 `run.mjs`，没有 `keepalive.sh` | 临时进程，随时会掉 | 收尾时必须转常驻 |
+| 什么都没有 | 已掉线 | 重新启动 → 验证上线 → 收尾保活 |
+| `keepalive.sh` 的 PPID = 1 | 伪保活（被 init 收养） | 无效，收尾时重发常驻 |
+
+**检查完如果发现掉线，重新拉起并再次保活，不能只报告「掉线了」就结束本轮。**
 
 ### 正确启动方式
 
