@@ -823,7 +823,9 @@ export class AgentBridge {
     const limit = this.config.limit?.textChunk ?? 1800;
 
     // 模型用 ||| 标示"分条发送"，模拟真人连发几条微信的节奏
-    let parts = String(text).split(/\s*\|\|\|\s*/).map((s) => s.trim()).filter(Boolean);
+    // 兜底：模型偶尔把分隔符写坏（例如 || 或 | |），先规整再切
+    const cleaned = String(text).replace(/\|{2,}/g, '|||').replace(/\|\s+\|/g, '|||');
+    let parts = cleaned.split(/\s*\|\|\|\s*/).map((s) => s.trim()).filter(Boolean);
     // 硬限制：最多两条，超出的合并进第二条，避免模型不听话连发
     const MAX = this.config.limit?.maxBubbles ?? 2;
     if (parts.length > MAX) {
