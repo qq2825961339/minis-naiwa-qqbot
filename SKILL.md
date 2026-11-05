@@ -152,7 +152,7 @@ cd /var/minis/skills/minis-naiwa-qqbot && nohup node run.mjs > /dev/null 2>&1 &
 | `/点一首晴天` | 点具体歌 |
 | `/找视频` | 随机视频（B 站，5 分钟内、28MB 内） |
 | `/找视频 猫` | 按关键词搜 |
-| `/换视频` | 视频后 5 条消息内有效 |
+| `/换视频` | 最近发过视频就能换，无条数限制 |
 
 实现文件：`src/music.mjs`（`wantsMusic` / `extractSongName`）、`src/bili-video.mjs`（`wantsVideo` / `extractVideoKeyword`）。
 正则都是 **`^\/` 开头**，所以「放首歌」「来个视频」这类自然语言只会当聊天。
