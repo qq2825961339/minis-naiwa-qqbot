@@ -24,3 +24,7 @@ node_modules/
 
 # 表情缓存（运行时抓取，不提交）
 persona/sticker-cache/
+
+
+# 离线依赖包（体积大，单独分发）
+vendor/*.tar.gz
