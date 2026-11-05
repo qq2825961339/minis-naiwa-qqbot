@@ -141,6 +141,52 @@ cd /var/minis/skills/minis-naiwa-qqbot && nohup node run.mjs > /dev/null 2>&1 &
 | 任务 `sessions` | 6~10 秒 | 读写文件、执行命令、联网 |
 
 
+## 指令系统（点歌 / 视频）
+
+**功能命令一律用斜杠指令，普通聊天不触发。**
+
+| 指令 | 作用 |
+|---|---|
+| `/点歌` | 随机放歌（热歌榜） |
+| `/点歌 逆战` | 点具体歌 |
+| `/点一首晴天` | 点具体歌 |
+| `/找视频` | 随机视频（B 站，5 分钟内、28MB 内） |
+| `/找视频 猫` | 按关键词搜 |
+| `/换视频` | 视频后 5 条消息内有效 |
+
+实现文件：`src/music.mjs`（`wantsMusic` / `extractSongName`）、`src/bili-video.mjs`（`wantsVideo` / `extractVideoKeyword`）。
+正则都是 **`^\/` 开头**，所以「放首歌」「来个视频」这类自然语言只会当聊天。
+
+### 指令面板（QQ 客户端打 `/` 弹出的列表）
+
+接口：`POST /v2/panels`，`scope` 支持 `c2c` / `group`，`target_type: all` 为全局。
+
+```json
+{
+  "scope": "group",
+  "target_type": "all",
+  "panel": { "items": [
+    { "type": "command", "name": "/点歌",   "desc": "想听啥说啥" },
+    { "type": "command", "name": "/找视频", "desc": "随便看个视频" },
+    { "type": "command", "name": "/换视频", "desc": "再来一个" }
+  ]}
+}
+```
+
+**面板 `name` 就是点击后填入输入框的内容**，所以必须带 `/`，否则代码匹配不上。
+
+### 自定义菜单（聊天框底部按钮）
+
+接口：`PUT /v2/menu`，**仅支持单聊**（官方限制）。`send_message` 字段决定点击后填入什么。
+
+```json
+{ "menu": { "items": [
+  { "type": "send_message", "name": "点歌", "send_message": "/点歌" }
+]}}
+```
+
+`GET /v2/menu` 返回 `{"menu":{}}` 表示空菜单；`PUT {"menu":{"items":[]}}` 可清空。
+
 ## 一键安装与启动（推荐）
 
 ```sh
