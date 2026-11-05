@@ -379,7 +379,7 @@ export class AgentBridge {
           speech = '';
         }
       }
-      if (speech && !video) {
+      if (speech && !video && !song) {
         voiceFile = await synthesize(speech, this.voiceCfg, this.voiceDir);
         this.log(`[voice] ${voiceFile ? '已合成' : '合成失败'}`);
       }
