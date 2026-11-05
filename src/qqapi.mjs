@@ -96,7 +96,11 @@ export class QQApi {
     const { kind, id } = peer; // kind: c2c | group
     const target = kind === 'group' ? `/v2/groups/${id}/files` : `/v2/users/${id}/files`;
     const body = { file_type: fileType, url, srv_send_msg: false };
-    if (fileData) { delete body.url; body.file_data = fileData; }
+    if (fileData) {
+      delete body.url;
+      // QQ 要求纯 base64，不能带 data:image/jpeg;base64, 前缀（带了报 40011000）
+      body.file_data = String(fileData).replace(/^data:[^;,]+;base64,/, '');
+    }
     const r = await this.request('POST', target, { body });
     return r?.file_info;
   }
