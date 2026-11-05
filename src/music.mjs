@@ -18,27 +18,29 @@ const DEFAULT = {
 
 /** 用户是不是在点歌 */
 // 只认指令：点歌 / 点歌 XXX / 点一首 XXX（开头必须是指令，后面只能是歌名）
-const ASK_RE = /^\/点歌$/;
-const ASK_RE2 = /^\/点一首\s*[^\s，。,!！？?]{1,16}$/;
-const ASK_RE3 = /^\/点歌\s+[^\s，。,!！？?]{1,16}$/;   // /点歌 逆战
-/** 「换一首」 */
-const NEXT_RE = /(?!)/;   // 不提供换歌：只能通过「点歌」重新点
-
+// 群里 @奶蛙 /点歌 会带前缀，统一去掉后再匹配
+/** 只要消息里出现 /点歌，就算点歌；后面跟的就是歌名 */
+// 只要消息里包含 /点歌 就触发，前面的内容（@某某等）不管
 export function wantsMusic(text) {
-  const t = String(text || '').trim();
-  return ASK_RE.test(t) || ASK_RE2.test(t) || ASK_RE3.test(t);
+  return /\/点歌|\/点一首/.test(String(text || ''));
 }
+
+/** 「换一首」 */
+const NEXT_RE = /(?!)/;   // 不提供换歌
+
 export function wantsNextMusic(text) {
   return NEXT_RE.test(String(text || ''));
 }
 
 /** 从「放首晴天」里抠歌名 */
 export function extractSongName(text) {
-  const t = String(text || '').trim();
-  // 「点歌」后面跟的就是歌名，没跟就是随机
-  const m = t.match(/^\/(?:点歌|点一首)\s*([^\s，。,!！？?]{1,16})/);
-  if (m && m[1]) return m[1].replace(/首歌|音乐/g, '').trim();
-  return '';
+  const t = String(text || '');
+  // 去掉 /点歌 之前的所有内容
+  const rest = t.replace(/^[\s\S]*?\/点(?:一首|歌)/, '').trim();
+  if (!rest) return '';                              // 只有 /点歌 → 随机
+  if (/^[了啦啊呀吧呢的]/.test(rest)) return '';       // 「点歌了」这种口语
+  const kw = rest.replace(/^一首\s*/, '').replace(/首歌|音乐/g, '').trim();
+  return kw.slice(0, 16);
 }
 
 /**
