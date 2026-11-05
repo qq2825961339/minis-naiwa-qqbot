@@ -21,3 +21,6 @@ qr.png
 bind.html
 .bind.out
 node_modules/
+
+# 表情缓存（运行时抓取，不提交）
+persona/sticker-cache/
