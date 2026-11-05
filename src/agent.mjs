@@ -474,7 +474,9 @@ export class AgentBridge {
           await this.sendLong(evt, lead);
         }
         // 从用户的话里扣出搜索词，没扣到就用回复的关键词
-        const kw = extractVideoKeyword(text) || '搞笑';
+        // 没给关键词就从这些里随机挑一个
+        const DEFAULT_KW = ['搞笑小视频', '沙雕', '萌宠', '迷惑行为', '翻车'];
+        const kw = extractVideoKeyword(text) || DEFAULT_KW[Math.floor(Math.random() * DEFAULT_KW.length)];
         kwUsed = kw;
         this.log(`[video] 搜索关键词「${kw}」`);
         video = await findVideo(kw);
@@ -532,7 +534,36 @@ export class AgentBridge {
           const tpl = [`找到个「${line}」`, `这个「${line}」`, `「${line}」这个还行`, `就这个「${line}」`];
           await this.sendLong(evt, tpl[Math.floor(Math.random() * tpl.length)]);
         }
-        await this.sendMedia(evt, video.url, 2);   // 2 = 视频
+        let sent = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await this.sendMedia(evt, video.url, 2);   // 2 = 视频
+            sent = true;
+            break;
+          } catch (e) {
+            this.log(`[video] 第 ${attempt + 1} 次发送失败: ${e.message.slice(0, 80)}`);
+            if (attempt >= 2) break;
+            // 先跟用户说一声
+            const FAIL = ['这个发不出来 换一个', '加载失败 我再找个', '这个卡住了 换下一个'];
+            await this.sendLong(evt, FAIL[Math.floor(Math.random() * FAIL.length)]).catch(() => {});
+            // 换下一个再试
+            const alt = await findVideo(kwUsed, { sent: c.sentVideos || [] }).catch(() => null);
+            if (!alt) {
+              await this.sendLong(evt, '找的几个都发不出来 换个关键词试试').catch(() => {});
+              break;
+            }
+            video = alt;
+            c.sentVideos = [...(c.sentVideos || []), alt.bvid].slice(-20);
+            const line2 = String(alt.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+            if (line2) await this.sendLong(evt, `这个「${line2}」`).catch(() => {});
+            await sleep(1200);
+          }
+        }
+        if (!sent) {
+          this.log('[video] 多次失败，放弃');
+          await this.sendLong(evt, '视频一直发不出来 待会儿再试').catch(() => {});
+          return;
+        }
         this.log(`[video] 已发送 ${video.title}`);
         // 视频发完就结束，不再走模型（否则模型会瞎回「我不会找视频」）
         c.history.push({ role: 'assistant', content: `[视频] ${video.title}` });
