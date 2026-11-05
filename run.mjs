@@ -53,7 +53,16 @@ function normalize(t, d) {
     return {
       ...base, scene: 'c2c', peerId: d.author?.user_openid, userId: d.author?.user_openid,
       text: cleanText(d.content), timestamp: d.timestamp, mentioned: true,
-      attachments: (d.attachments || []).map((x) => ({ url: x.url, contentType: x.content_type })),
+      // QQ 服务端自带的语音转文字（语音消息时 content 是空的，文字在这里）
+      asrText: (d.attachments || []).map((x) => x.asr_refer_text).filter(Boolean).join(' '),
+      // 引用回复用：从 message_scene.ext 里取 msg_idx=REFIDX_xxx
+      refIdx: (d.message_scene?.ext || []).map((e) => String(e)).join(' ').match(/msg_idx=(REFIDX_[A-Za-z0-9+/=_-]+)/)?.[1] || '',
+      attachments: (d.attachments || []).map((x) => ({
+        url: x.url, contentType: x.content_type, filename: x.filename,
+        asrText: x.asr_refer_text || '',      // QQ 自带语音转文字
+        wavUrl: x.voice_wav_url || '',        // QQ 直接给的 wav，无需解 silk
+      })),
+      raw_data: d,
     };
   }
 
@@ -63,7 +72,13 @@ function normalize(t, d) {
       text: cleanText(d.content), timestamp: d.timestamp,
       // GROUP_AT_MESSAGE_CREATE 一定是 @；GROUP_MESSAGE_CREATE 是开启了"接收全部消息"后的非 @ 消息
       mentioned: t === 'GROUP_AT_MESSAGE_CREATE',
-      attachments: (d.attachments || []).map((x) => ({ url: x.url, contentType: x.content_type })),
+      asrText: (d.attachments || []).map((x) => x.asr_refer_text).filter(Boolean).join(' '),
+      attachments: (d.attachments || []).map((x) => ({
+        url: x.url, contentType: x.content_type, filename: x.filename,
+        asrText: x.asr_refer_text || '',      // QQ 自带语音转文字
+        wavUrl: x.voice_wav_url || '',        // QQ 直接给的 wav，无需解 silk
+      })),
+      raw_data: d,
     };
   }
 
@@ -96,38 +111,9 @@ if (fs.existsSync(cfgPath)) {
   config.access = { ...{ defaultRequireMention: true }, ...(config.access || {}) };
 }
 
-// ---------------- 凭证：环境变量 / 扫码，二选一 ----------------
-const ENV_ID = 'QQBOT_APPID';
-const ENV_SECRET = 'QQBOT_SECRET';
-const DL_ID = 'minis://settings/environments?create_key=QQBOT_APPID&create_value=&create_note=QQ%20Bot%20AppID%20%E4%BB%8E%20https%3A%2F%2Fq.qq.com%2F%E8%8E%B7%E5%8F%96';
-const DL_SECRET = 'minis://settings/environments?create_key=QQBOT_SECRET&create_value=&create_note=QQ%20Bot%20AppSecret%20%E4%BB%8E%20https%3A%2F%2Fq.qq.com%2F%E8%8E%B7%E5%8F%96';
+// ---------------- 凭证：只支持扫码（credentials.json） ----------------
+const DL = 'minis://skills/minis-naiwa-qqbot/start.sh';
 
-function envCreds() {
-  const id = process.env[ENV_ID];
-  const secret = process.env[ENV_SECRET];
-  return id && secret ? { appId: id.trim(), appSecret: secret.trim(), userOpenid: null } : null;
-}
-
-/** 从环境变量的「备注」读凭证（用户选择把凭证存放在 note 里，值字段无法写入） */
-function noteCreds() {
-  const readNote = (key) => {
-    try {
-      const out = execFileSync('minis-config', ['get', `envvars.${key}.note`],
-        { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] });
-      let v = JSON.parse(out)?.value ?? '';
-      // value 可能带引号
-      v = String(v).trim().replace(/^"|"$/g, '').replace(/\\\//g, '/');
-      return v;
-    } catch { return ''; }
-  };
-  const id = readNote(ENV_ID);
-  const secret = readNote(ENV_SECRET);
-  // AppID 一般 10 位左右，Secret 32 位；都齐全才算有效
-  if (id.length >= 6 && secret.length >= 16) {
-    return { appId: id, appSecret: secret, userOpenid: null, from: 'note' };
-  }
-  return null;
-}
 function fileCreds() {
   try {
     const c = loadJson('credentials.json', 'credentials.json');
@@ -136,51 +122,16 @@ function fileCreds() {
   } catch { return null; }
 }
 
-/** --login env|qr；不传则自动：环境变量优先，都存在时提示 */
+/** 只认扫码凭证；没有就让上层去跑 bind.mjs */
 function resolveCredentials() {
-  const i = args.indexOf('--login');
-  const want = i >= 0 ? String(args[i + 1] || '').toLowerCase() : '';
-  const fromEnv = envCreds();
-  const fromFile = fileCreds();
-
-  if (want === 'env') {
-    // 备注里的凭证优先：值字段可能被写坏（如 Secret 被截断），备注是我们主动同步的正确值
-    const c = noteCreds() || envCreds();
-    if (!c) {
-      console.error(`\n❌ 指定 --login env，但环境变量 ${ENV_ID} / ${ENV_SECRET} 值或备注都读不到凭证。\n`);
-      console.error(`   去这里填写（值无效时也可写进备注）：\n   ${DL_ID}\n   ${DL_SECRET}\n`);
-      process.exit(4);
-    }
-    log(`[auth] 登录方式：AppID/AppSecret（${c.from === 'note' ? '环境变量备注' : '环境变量值'}）`);
-    return c;
+  const c = fileCreds();
+  if (!c) {
+    console.error('\n❌ 没有可用凭证（credentials.json 不存在或损坏）。\n');
+    console.error('   运行 ./start.sh 会自动生成二维码，扫码后自动上线。\n');
+    process.exit(2);
   }
-
-  if (want === 'qr') {
-    if (!fromFile) {
-      console.error('\n❌ 指定 --login qr，但没有 credentials.json。请先运行：node bind.mjs --png\n');
-      process.exit(5);
-    }
-    log('[auth] 登录方式：扫码（credentials.json）');
-    return fromFile;
-  }
-
-  if (want && !['env', 'qr'].includes(want)) {
-    console.error(`\n❌ --login 只接受 env 或 qr，收到：${want}\n   用法：node run.mjs --login env   或   node run.mjs --login qr\n`);
-    process.exit(6);
-  }
-
-  // 自动模式：优先凭据文件（扫码），备注可作为补充
-  const fromNote = noteCreds();
-  if (fromFile) { log('[auth] 登录方式：扫码（credentials.json）'); return fromFile; }
-  if (fromEnv) { log('[auth] 登录方式：AppID/AppSecret（环境变量值）'); return fromEnv; }
-  if (fromNote) { log('[auth] 登录方式：AppID/AppSecret（环境变量备注）'); return fromNote; }
-
-  console.error(`\n❌ 没有可用凭证。两种方式任选：\n`);
-  console.error(`   1) 扫码：node bind.mjs --png`);
-  console.error(`   2) 环境变量：在设置里填写 ${ENV_ID} 与 ${ENV_SECRET}（值无效时也可写进备注）`);
-  console.error(`      ${DL_ID}`);
-  console.error(`      ${DL_SECRET}\n`);
-  process.exit(2);
+  log('[auth] 登录方式：扫码（credentials.json）');
+  return c;
 }
 
 const bot = resolveCredentials();
