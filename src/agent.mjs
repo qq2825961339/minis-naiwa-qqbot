@@ -417,7 +417,7 @@ export class AgentBridge {
           c.sentSongs = [...(c.sentSongs || []), song.id].slice(-20);
           c.lastSong = { kw, id: song.id, at: Date.now() };
           this.markDirty();
-          this.log(`[music] ${song.name} - ${song.artist} ${song.mb}MB`);
+          this.log(`[music] ${song.name} - ${song.artist} ${song.mb}MB${song.playlist ? ' 来自「' + song.playlist + '」' : ''}`);
         } else {
           await this.sendLong(evt, '这个没找着能放的 换个试试');
         }
@@ -429,33 +429,52 @@ export class AgentBridge {
 
     // 「换一个」：沿用 10 分钟内的关键词，跳过已发过的
     // 发视频后的 5 条消息内，命中关键词就继续给
-    // /换视频 只要最近发过视频就能换，不再限制条数
-    if (!video && c.lastVideo
-        && /^(换视频|换个视频)$/.test(text)) {
+    // ---------- /换视频 ----------
+    let handledSwap = false;
+    if (/\/换视频/.test(text)) {
+      handledSwap = true;
+      const DEFAULT_KW = ['搞笑小视频', '沙雕', '萌宠', '迷惑行为', '翻车'];
+      const prevKw = c.lastVideo?.kw || '';
+      const kw = prevKw || DEFAULT_KW[Math.floor(Math.random() * DEFAULT_KW.length)];
+      const TPL_OLD = [
+        `我再找找类似「${prevKw}」的`,
+        `还有「${prevKw}」的 等我翻翻`,
+        `找找别的「${prevKw}」`,
+        `「${prevKw}」相关的再给你来个`,
+        `翻翻「${prevKw}」还有啥`,
+      ];
+      const TPL_NEW = [
+        `我给你找个「${kw}」的`,
+        `那来点「${kw}」的`,
+        `「${kw}」的行不行 我找找`,
+        `没指定的话 我给你挑个「${kw}」的`,
+      ];
+      const said = prevKw
+        ? TPL_OLD[Math.floor(Math.random() * TPL_OLD.length)]
+        : TPL_NEW[Math.floor(Math.random() * TPL_NEW.length)];
+      this.log(`[video] 换视频 关键词「${kw}」${prevKw ? '（沿用）' : '（随机）'}`);
       try {
-        const MORE = ['再找一个', '还有个', '再看看', '再翻翻', '还有一个', '继续找'];
-        const say = MORE[Math.floor(Math.random() * MORE.length)];
-        const moreP = this.config.access?.video?.leadVoiceChance ?? 0.3;
-        if (Math.random() < moreP) {
-          const mf = await synthesize(say, this.voiceCfg, this.voiceDir).catch(() => null);
-          if (mf) await this.sendMedia(evt, mf, 3);
-          else await this.sendLong(evt, say);
+        // 先应答（可语音）
+        if (Math.random() < (this.config.access?.video?.leadVoiceChance ?? 0.3)) {
+          const mf = await synthesize(said, this.voiceCfg, this.voiceDir).catch(() => null);
+          if (mf) await this.sendMedia(evt, mf, 3); else await this.sendLong(evt, said);
         } else {
-          await this.sendLong(evt, say);
+          await this.sendLong(evt, said);
         }
-        video = await findVideo(c.lastVideo.kw, { sent: c.sentVideos || [c.lastVideo.bvid] });
+        video = await findVideo(kw, { sent: c.sentVideos || [] });
+        kwUsed = kw;
         if (video) {
-          kwUsed = c.lastVideo.kw;
-          this.log(`[video] 换一个：${video.title}`);
+          this.log(`[video] 换视频 → ${video.title} ${video.mb}MB`);
         } else {
-          await this.sendLong(evt, '这个关键词没别的了 换个词吧');
+          const NOPE2 = ['这个关键词下没别的了 换个词试试', '类似的我找不着了 换个说法', '没别的了 你说个别的词'];
+          await this.sendLong(evt, NOPE2[Math.floor(Math.random() * NOPE2.length)]).catch(() => {});
         }
       } catch (e) {
-        this.log(`[video] 换一个失败: ${e.message}`);
+        this.log(`[video] 换视频失败: ${e.message}`);
       }
     }
 
-    const askVideo = this.config.access?.video?.enabled !== false && wantsVideo(text);
+    const askVideo = !handledSwap && this.config.access?.video?.enabled !== false && wantsVideo(text);
     if (askVideo) {
       try {
         // 随机应答，别每次都说同一句；可配置成语音
