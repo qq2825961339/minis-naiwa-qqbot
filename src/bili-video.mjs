@@ -9,9 +9,9 @@
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 const DEFAULT = {
   maxMinutes: 5,       // 超过这么长的不选（避免超 30MB）
-  maxMB: 28,           // HEAD 探测到的体积上限
+  maxMB: 20,           // 超过 20MB 很容易上传超时（QQ 那边下载慢）
   minSeconds: 8,       // 太短的也不要
-  tryCount: 5,         // 最多试几条
+  tryCount: 8,         // 最多试几条
   qn: 32,              // 32=480P，体积小
 };
 
@@ -59,8 +59,10 @@ export async function findVideo(keyword, opts = {}) {
   if (!list.length) return null;
 
   // 2) 逐条试，直到拿到体积合适的 mp4
+  // 多探几条，收集能拿到 mp4 的，再按体积从小到大挑（小的更容易传成功）
+  const found = [];
   for (const v of list.slice(0, cfg.tryCount)) {
-    if (exclude.has(v.bvid) || sentBefore.has(v.bvid)) continue;   // 「换一个」时不重复
+    if (exclude.has(v.bvid) || sentBefore.has(v.bvid)) continue;
     try {
       const jv = await (await fetch(
         `https://api.bilibili.com/x/web-interface/view?bvid=${v.bvid}`, { headers: H, signal: AbortSignal.timeout(12000) })).json();
@@ -73,30 +75,31 @@ export async function findVideo(keyword, opts = {}) {
       const url = jp.data?.durl?.[0]?.url;
       if (!url) continue;
 
-      // 3) HEAD 探体积
       let mb = 0;
       try {
         const h = await fetch(url, { method: 'HEAD', headers: H, signal: AbortSignal.timeout(10000) });
         mb = Number(h.headers.get('content-length') || 0) / 1048576;
       } catch { mb = 0; }
 
-      if (mb && mb > cfg.maxMB) continue;
-
-      return {
+      if (mb && mb > cfg.maxMB) continue;   // 太大，容易超时
+      found.push({
         url,
         title: String(v.title || '').replace(/<[^>]+>/g, ''),
         duration: v.duration,
         bvid: v.bvid,
         mb: Number(mb.toFixed(1)),
-      };
+      });
+      if (found.length >= 3) break;
     } catch {
       continue;
     }
   }
-  return null;
+  if (!found.length) return null;
+  found.sort((a, b) => (a.mb || 99) - (b.mb || 99));   // 从小到大
+  return found[0];
 }
 
-/** 判定用户是不是在要视频（只认指令） */
+
 // 去掉「@某某」前缀（可能带空格，可能有多个）
 const stripV = (t) => String(t || '').replace(/^\s*(?:[@＠][^\s\/]+\s*)+/, '').trim();
 
