@@ -55,6 +55,19 @@ const POSITIVE = [
   ['拜拜', '告辞'], ['走了', '告辞'], ['睡了', '晚安'], ['晚安', '晚安'], ['好梦', '晚安'],
   ['早', '早安'], ['早安', '早安'], ['饿了', '馋'], ['好饿', '馋'],
   ['困了', '困'], ['想睡', '困'], ['啥', '问号'], ['你说啥', '问号'],
+  // ---- 新增 11 类 ----
+  ['饿了', '饿'], ['好饿', '饿'], ['吃饭', '饿'],
+  ['哈哈哈', '开心'], ['笑出声', '开心'], ['好玩', '开心'],
+  ['气死', '生气'], ['火大', '生气'], ['烦死', '生气'],
+  ['害怕', '害怕'], ['吓到', '害怕'], ['恐怖', '害怕'],
+  ['害羞', '害羞'], ['不好意思', '害羞'], ['脸红了', '害羞'],
+  ['加油', '加油'], ['你可以', '加油'], ['冲', '加油'],
+  ['晕', '晕'], ['看不懂', '问号'],
+  ['谢谢', '谢谢'], ['谢了', '谢谢'], ['多谢', '谢谢'],
+  ['再见', '告辞'], ['先走了', '告辞'], ['撤了', '告辞'],
+  ['无聊', '无聊'], ['没意思', '无聊'], ['好闲', '无聊'],
+  ['一般', '无语'], ['就这', '无语'],
+  ['服', '无语'], ['离谱了', '离谱'],
 ];
 /**
  * 代码兜底判断——模型没写 [表情:] 时调用
@@ -68,6 +81,39 @@ export function autoSticker(userText, replyText) {
   }
   return null;
 }
+
+/** 每个类别配 2~4 个近义搜索词，第一个没有图就往后试 */
+const SYNONYM = {
+  笑哭: ['笑哭', '笑死', '大笑', '开心'],
+  无语: ['无语', '沉默', '服了'],
+  离谱: ['离谱', '过分', '胡说'],
+  累了: ['累了', '好累', '疲惫'],
+  破防: ['破防', '崩溃', '心碎'],
+  摆烂: ['摆烂', '躺平', '放弃'],
+  牛: ['牛', '厉害', '点赞'],
+  震惊: ['震惊', '惊讶', '不敢相信'],
+  尴尬: ['尴尬', '汗', '无语'],
+  抱抱: ['抱抱', '拥抱', '摸摸头'],
+  好的: ['好的', '没问题', 'OK'],
+  晚安: ['晚安', '睡觉', '好梦'],
+  早安: ['早安', '早上好', '起床'],
+  问号: ['问号', '疑惑', '什么'],
+  馋: ['馋', '流口水', '想吃'],
+  困: ['困', '打哈欠', '想睡'],
+  告辞: ['告辞', '再见', '拜拜'],
+  开心: ['开心', '高兴', '快乐'],
+  太难了: ['太难了', '好难', '难受'],
+  心疼: ['心疼', '难过', '抱抱'],
+  摸摸: ['摸摸头', '安慰', '拍拍'],
+  饿: ['饿了', '吃饭', '饿'],
+  生气: ['生气', '发火', '气死'],
+  害怕: ['害怕', '吓人', '恐怖'],
+  害羞: ['害羞', '脸红', '羞'],
+  加油: ['加油', '努力', '冲'],
+  晕: ['晕', '头大', '头晕'],
+  谢谢: ['谢谢', '感谢', '谢啦'],
+  无聊: ['无聊', '没意思', '发呆'],
+};
 
 // ---------------- 引擎 ----------------
 
@@ -109,32 +155,40 @@ export class StickerEngine {
     return true;
   }
 
-  /** 搜一张图，只返回直链（不下载、不落盘） */
+  /** 搜一张图：把所有近义词的结果合并，再从整个池子里随机挑 */
   async pick(query) {
-    const list = await searchEmoji(query, { limit: 12 });
-    if (!list.length) { this.log(`[sticker] 搜不到「${query}」`); return null; }
+    const words = SYNONYM[query] || [query];
+    const all = [];
+    const seenUrls = new Set();
 
-    const pool = list
-      .filter((e) => (!e.width || e.width <= this.cfg.maxWidth) && (!e.height || e.height <= this.cfg.maxHeight))
-      .slice(0, Math.max(1, this.cfg.pickFrom))
-      .filter((e) => !this.seen.includes(e.thumb))
-      .sort(() => Math.random() - 0.5);
+    for (const w of words) {
+      const list = await searchEmoji(w, { limit: 16 });
+      for (const e of list) {
+        if (!e.thumb || seenUrls.has(e.thumb)) continue;
+        if (e.width && e.width > this.cfg.maxWidth) continue;
+        if (e.height && e.height > this.cfg.maxHeight) continue;
+        seenUrls.add(e.thumb);
+        all.push({ ...e, from: w });
+      }
+      // 池子够大就不用再翻了
+      if (all.length >= 12) break;
+    }
 
-    const e = pool[0] || list[0];
-    if (!e) return null;
-    const out = { url: e.thumb, query, title: e.title };
+    if (!all.length) { this.log(`[sticker] 「${query}」及近义词都没搜到`); return null; }
+
+    let pool = all.filter((e) => !this.seen.includes(e.thumb));
+    if (!pool.length) { this.seen = this.seen.slice(-8); pool = all; }
+
+    const e = pool[Math.floor(Math.random() * pool.length)];
+    const out = { url: e.thumb, query: e.from, title: e.title };
     this._noteUse(out);
-    this.log(`[sticker] 「${query}」→ ${e.width}x${e.height} ${e.thumb.slice(-14)}`);
+    this.log(`[sticker] 「${query}」→ 池${all.length}张 用「${e.from}」${e.thumb.slice(-12)}`);
     return out;
   }
 
-
-
-
-
   _noteUse(st) {
     if (st?.url) this.seen.push(st.url);
-    if (this.seen.length > 40) this.seen.shift();
+    if (this.seen.length > 60) this.seen.shift();
     this.replyCount = 0;
   }
 
