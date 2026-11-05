@@ -13,6 +13,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { shouldReply, noteIncoming, noteReply } from './gate.mjs';
+import { StickerEngine } from './sticker-engine.mjs';
 
 const execFileP = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -28,6 +30,8 @@ export class AgentBridge {
     this.state = this.loadState();
     this.mergeGroups();        // 把 groups.json 里记录的群并入 access.groups
     this.queues = new Map();
+    this.stickers = new StickerEngine({ here, config, log });
+    this.lastGroupReplyAt = 0;   // 全群插话冷却（跨会话共享）
     this.stats = { inbound: 0, outbound: 0, errors: 0, startedAt: Date.now() };
   }
 
@@ -126,13 +130,46 @@ export class AgentBridge {
     if (evt.ttl < 0) return false;                       // 疑似重复推送
     const id = evt.userId;
     if ((a.allowFrom || []).length && !a.allowFrom.includes(id)) return false;
-    if ((a.blockFrom || []).includes(id)) return false;
     if (evt.scene === 'group') {
       const p = this.groupPolicy(evt.peerId);
       if (!p.enabled) return false;
-      if (p.requireMention && !evt.mentioned) {
-        if (!evt.text) return false;
-        this.log(`[gate] 群里未 @ 机器人，忽略（群 ${evt.peerId.slice(0, 8)}…）`);
+      // 说话时机：先看要不要回（@ 必回；没 @ 的按 chatter 配置选择性接话）
+      const c = this.convo(this.key(evt));
+      // 显式关了 chatter、或这个群仍标着 requireMention:true，走原来的「必须 @」老路
+      const chatterOn = this.config.access?.chatter?.enabled !== false;
+      // chatter 关闭 = 每条都回（不掷骰子、不要求 @）；只有显式 requireMention:true 的群才强制 @
+      if (!chatterOn) {
+        if (!evt.text && !(evt.attachments || []).length) return false;   // 空消息仍不回
+        return true;
+      }
+      if (p.requireMention) {
+        if (!evt.mentioned) {
+          if (!evt.text) return false;
+          this.log(`[gate] 群里未 @ 机器人，忽略（群 ${String(evt.peerId).slice(0, 8)}…）`);
+          return false;
+        }
+        return true;
+      }
+      const v = shouldReply(evt, {
+        config: this.config,
+        convo: { ...c, lastReplyAt: this.lastGroupReplyAt },
+      });
+      // 只有真的要回才记账，否则一条消息会被 noteIncoming 重复计入热聊窗口
+      if (!v.reply) {
+        if (v.reason !== 'mentioned') {
+          this.log(`[gate] 不回（${v.reason}）群 ${String(evt.peerId).slice(0, 8)}…`);
+        }
+        return false;
+      }
+      noteIncoming(c, evt);
+      return true;
+    }
+
+    // 私聊也过一遍 gate：只拦纯刷屏（「哈哈哈」「666」「？」）
+    if (evt.scene === 'c2c') {
+      const v = shouldReply(evt, { config: this.config, convo: this.convo(this.key(evt)) });
+      if (!v.reply) {
+        this.log(`[gate] 私聊不回（${v.reason}）`);
         return false;
       }
     }
@@ -259,10 +296,37 @@ export class AgentBridge {
     }
     c.history.push({ role: 'assistant', content: answer || '' });
     c.updatedAt = Date.now();
+    c.lastReplyAt = Date.now();   // 本会话发言时间（冷却用）
+    if (evt.scene === 'group') this.lastGroupReplyAt = c.lastReplyAt;  // 全群共享的插话冷却
+    c.recentSenders = [];          // 说完话就清空热聊窗口
     this.markDirty();
     this.saveState();
     if (!answer || !answer.trim()) return;
-    await this.sendLong(evt, answer.trim());
+
+    // 表情：模型给了 [表情:xx] 就用它；没给则按情绪词兜底
+    let outText = answer.trim();
+    let sticker = null;
+    try {
+      const r = await this.stickers.resolve(text, outText, evt);
+      outText = r.text || '';
+      sticker = r.sticker;
+      if (r.text !== answer.trim()) {
+        c.history[c.history.length - 1].content = r.text;   // 历史里存剥掉标签的版本
+        this.markDirty();
+      }
+    } catch (e) {
+      this.log(`[sticker] 处理失败: ${e.message}`);
+    }
+
+    if (outText) await this.sendLong(evt, outText);
+    if (sticker) {
+      try {
+        await this.sendMedia(evt, sticker.url, 1);
+        this.log(`[sticker] 已发送 ${sticker.query}`);
+      } catch (e) {
+        this.log(`[sticker] 发送失败: ${e.message}`);
+      }
+    }
   }
 
   // ---------------- Agent 调用 ----------------
@@ -359,7 +423,9 @@ export class AgentBridge {
     if (mode === 'sessions') return this.runViaSession(k, evt, c, userLine);
     if (mode === 'loop') return this.runViaLoop(k, evt);
 
-    const inputFile = path.join(this.here, '.tmp-input.json');
+    // 每次调用用独立临时文件：固定文件名会被并发请求互相覆盖，导致读到半个 JSON
+    const inputFile = path.join(this.here,
+      `.tmp-input-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
     const messages = c.history.map((m) => ({ role: m.role, content: m.content }));
 
     // 决定用哪个模型：配置写死 or 自动挑选
@@ -395,6 +461,12 @@ export class AgentBridge {
       }
     }
 
+    // 开场假对话：只在会话还没有历史时垫在最前面（固定语气，不占后续 token）
+    const begin = this.beginDialogs();
+    if (begin.length && messages.length === 1) {
+      messages.unshift(...begin);
+    }
+
     fs.writeFileSync(inputFile, JSON.stringify({ messages }));
     const model = sel.entryId;
     const args = ['run', '--model', model, '--input', inputFile,
@@ -411,8 +483,10 @@ export class AgentBridge {
       const { stdout } = await execFileP('minis-model-use', args, { maxBuffer: 32 * 1024 * 1024, timeout: 180_000 });
       return this.extractText(stdout);
     } catch (e) {
-      // 415 / Unsupported Media：模型不收这张图。去掉图片用文字重试一次，别把错误抛给用户
       const msg = String(e.stderr || e.message || '');
+      // 把子进程真实报错写进日志，否则只剩一句 Command failed 查不出原因
+      this.log(`[model] 失败 stdout=${(e.stdout || '').slice(0, 300)} stderr=${(e.stderr || '').slice(0, 500)} code=${e.code}`);
+      // 415 / Unsupported Media：模型不收这张图。去掉图片用文字重试一次，别把错误抛给用户
       if (multimodal && /415|Unsupported Media/i.test(msg)) {
         this.log('[vision] 模型拒收该图片（415），改用文字描述重试');
         const plain = c.history.map((m) => ({ role: m.role, content: m.content }));
@@ -421,6 +495,8 @@ export class AgentBridge {
         return this.extractText(r2.stdout);
       }
       throw e;
+    } finally {
+      try { fs.unlinkSync(inputFile); } catch {}
     }
   }
 
@@ -502,6 +578,29 @@ export class AgentBridge {
    *   2. persona/ 下只有一个 .md 就直接用它（旧配置无 persona 字段也能生效）
    *   3. 都没有 → 返回 null，上层退回 systemPrompt
    */
+  /**
+   * 读人格目录里的 begin-dialogs.json（假对话开场）
+   * 只在会话第一轮垫进去，用来固定语气，不影响后续上下文长度
+   */
+  beginDialogs() {
+    if (this._beginCache !== undefined) return this._beginCache;
+    this._beginCache = [];
+    if (this.config.agent?.beginDialogs === false) return this._beginCache;
+    try {
+      const f = path.join(this.here, 'persona', 'begin-dialogs.json');
+      if (!fs.existsSync(f)) return this._beginCache;
+      const arr = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (!Array.isArray(arr)) return this._beginCache;
+      const ok = arr.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string');
+      // 去掉占位用的「不接」示例，那些只是示范「该沉默」，真发出去会变成怪对话
+      this._beginCache = ok.filter((m) => m.role !== 'assistant' || !/^\[.*不接.*\]$/.test(m.content.trim()));
+      this.log(`[persona] 开场假对话 ${this._beginCache.length} 条`);
+    } catch (e) {
+      this.log(`[persona] 开场假对话读取失败: ${e.message}`);
+    }
+    return this._beginCache;
+  }
+
   resolvePersona() {
     const dir = path.join(this.here, 'persona');
     const a = this.config.agent || {};
@@ -737,14 +836,15 @@ export class AgentBridge {
 
     let seq = 1;
     for (const bubble of bubbles) {
+      // 记下已用到的 seq，后面的图片消息从这里继续，避免 40054005 去重
       // 单条过长仍按原逻辑切块
       for (const chunk of splitText(bubble, limit)) {
         const payload = this.stripForQQ(chunk);
         try {
           let r;
-          if (evt.scene === 'group') r = await this.api.sendGroup(evt.peerId, payload, evt.msgId, seq++);
+          if (evt.scene === 'group') { r = await this.api.sendGroup(evt.peerId, payload, evt.msgId, seq); this._bumpSeq(evt.msgId, seq); seq++; }
           else if (evt.scene === 'guild') r = await this.api.sendChannel(evt.peerId, payload, evt.msgId);
-          else r = await this.api.sendC2C(evt.peerId, payload, evt.msgId, seq++);
+          else { r = await this.api.sendC2C(evt.peerId, payload, evt.msgId, seq); this._bumpSeq(evt.msgId, seq); seq++; }
           this.stats.outbound += 1;
           if (r?.id) this.log(`[out] ${evt.scene}->${evt.peerId} id=${r.id} seq=${seq - 1}`);
         } catch (e) {
@@ -773,11 +873,32 @@ export class AgentBridge {
 
   async sendMedia(evt, file, kind) {
     const { fileToDataUrl, guessFileType } = await import('./qqapi.mjs');
-    const ft = kind ? Number(kind) : guessFileType(file);
+    const isUrl = /^https?:\/\//i.test(file);
+    const ft = kind ? Number(kind) : (isUrl ? 1 : guessFileType(file));
     const peer = { kind: evt.scene === 'group' ? 'group' : 'c2c', id: evt.peerId };
-    const fileInfo = await this.api.uploadFile(peer, ft, undefined, fileToDataUrl(file));
-    if (evt.scene === 'group') return this.api.sendMediaGroup(evt.peerId, fileInfo, evt.msgId, 1);
-    return this.api.sendMediaC2C(evt.peerId, fileInfo, evt.msgId, 1);
+    // 有直链就让 QQ 自己下，省掉本地读取和 base64（体积小 1/3，iSH 不吃内存）
+    const fileInfo = isUrl
+      ? await this.api.uploadFile(peer, ft, file)
+      : await this.api.uploadFile(peer, ft, undefined, fileToDataUrl(file));
+    // msg_seq 必须比同一条消息已用的所有序号大，否则 QQ 报 40054005（消息被去重）
+    const seq = (this._seqOf(evt.msgId) || 1) + 1;
+    this._bumpSeq(evt.msgId, seq);
+    if (evt.scene === 'group') return this.api.sendMediaGroup(evt.peerId, fileInfo, evt.msgId, seq);
+    return this.api.sendMediaC2C(evt.peerId, fileInfo, evt.msgId, seq);
+  }
+
+  /** 每个 msgId 记录已用过的最大 msg_seq */
+  _seqOf(msgId) {
+    return this._seqMap?.get(msgId);
+  }
+
+  _bumpSeq(msgId, seq) {
+    if (!this._seqMap) this._seqMap = new Map();
+    this._seqMap.set(msgId, Math.max(seq, this._seqMap.get(msgId) || 0));
+    // 只留最近 50 条，防止无限增长
+    if (this._seqMap.size > 50) {
+      this._seqMap.delete(this._seqMap.keys().next().value);
+    }
   }
 }
 
