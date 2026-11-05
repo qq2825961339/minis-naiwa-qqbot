@@ -97,15 +97,18 @@ export async function findVideo(keyword, opts = {}) {
 }
 
 /** 判定用户是不是在要视频（只认指令） */
+// 去掉「@某某」前缀（可能带空格，可能有多个）
+const stripV = (t) => String(t || '').replace(/^\s*(?:[@＠][^\s\/]+\s*)+/, '').trim();
+
+/** 只要消息里包含 /找视频 或 /换视频 就触发 */
 export function wantsVideo(text) {
-  const t=String(text||'').trim();
-  return /^\/找视频$/.test(t) || /^\/找视频\s+[^\s，。,!！？?]{1,12}$/.test(t) || /^\/换视频$/.test(t);
+  return /\/找视频|\/换视频/.test(String(text || ''));
 }
 
-/** 从「来个视频 猫」里抠出搜索词 → 「猫」，没跟就空（随机） */
+/** 从 /找视频 后面取搜索词；没跟就是空（随机） */
 export function extractVideoKeyword(text) {
-  const t = String(text || '').trim();
-  const m = t.match(/^\/找视频\s*([^\s，。,!！？?]{1,12})/);
+  const t = String(text || '');
+  const m = t.match(/\/找视频\s*([^\s，。,!！？?\/]{1,12})/);
   if (m && m[1]) return m[1].replace(/的视频$|视频/g, '').trim();
   return '';
 }
