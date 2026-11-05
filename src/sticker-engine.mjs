@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { searchEmoji, fetchEmoji, sniffType } from './sogou-emoji.mjs';
+import { searchEmoji } from './fabiaoqing.mjs';   // 发表情站，图源比搜狗准得多
 
 const DEFAULT = {
   enabled: true,
@@ -82,14 +82,20 @@ export class StickerEngine {
 
   /** 抽 [表情:XX] 标签；XX 最多 4 字 */
   static parse(reply) {
-    const m = String(reply || '').match(/\[表情[:：]\s*([^\]|]+?)\s*(?:\|[^\]]*)?\]/);
-    if (!m) return { text: String(reply || ''), want: false, query: '' };
+    const raw = String(reply || '');
+    const re = /\[表情[:：]\s*([^\]|]+?)\s*(?:\|[^\]]*)?\]/g;
+    const m = re.exec(raw);
+    if (!m) return { text: raw, want: false, query: '' };
     const q = [...m[1].replace(/[，。！？,.!?\s]/g, '')].slice(0, 4).join('');
-    return {
-      text: String(reply).replace(m[0], '').trim(),
-      want: true,
-      query: q,
-    };
+    // 去掉所有表情标签，再清掉标签旁边残留的分条符，避免发出「给你|||」
+    let text = raw.replace(re, '')
+      .replace(/(\|{2,}\s*)+$/g, '')      // 结尾残留的 |||
+      .replace(/^\s*(\|{2,}\s*)+/g, '')    // 开头残留的 |||
+      .replace(/\s*\|{2,}\s*/g, '|||')      // 中间多个分隔符压成一个
+      .trim();
+    // 只剩分隔符就当空
+    if (/^(\|{2,}\s*)+$/.test(text)) text = '';
+    return { text, want: true, query: q };
   }
 
   /** 频率 + 场景检查；不通过时计一次回复 */
@@ -105,7 +111,7 @@ export class StickerEngine {
 
   /** 搜一张图，只返回直链（不下载、不落盘） */
   async pick(query) {
-    const list = await searchEmoji(`表情包 ${query}`, { limit: 12 });
+    const list = await searchEmoji(query, { limit: 12 });
     if (!list.length) { this.log(`[sticker] 搜不到「${query}」`); return null; }
 
     const pool = list
