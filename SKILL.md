@@ -174,6 +174,19 @@ cd /var/minis/skills/minis-naiwa-qqbot && nohup node run.mjs > /dev/null 2>&1 &
 ```
 
 **面板 `name` 就是点击后填入输入框的内容**，所以必须带 `/`，否则代码匹配不上。
+注意：**服务端保存时会去掉 name 里的 `/`**，查询回来是「点歌」，但用户点击发出去的是 `/点歌`。
+
+### 换账号/换设备后要重建面板
+
+面板和菜单绑定在 AppID 上，扫码换号后旧的不会跟过来。已封装成一键脚本：
+
+```sh
+node scripts/ensure-panels.mjs          # 缺什么建什么（幂等）
+node scripts/ensure-panels.mjs --check  # 只检查
+node scripts/ensure-panels.mjs --force  # 全部删除重建
+```
+
+`start.sh` 已内置这一步，首次启动会自动补齐。
 
 ### 自定义菜单（聊天框底部按钮）
 
