@@ -14,7 +14,11 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { shouldReply, noteIncoming, noteReply } from './gate.mjs';
+import { judgeGroup } from './group-judge.mjs';
 import { StickerEngine } from './sticker-engine.mjs';
+import { findVideo, wantsVideo, extractVideoKeyword } from './bili-video.mjs';
+import { findSong, wantsMusic, wantsNextMusic, extractSongName } from './music.mjs';
+import { shouldSpeak, synthesize, voiceConfig, cleanupVoices, parseVoice } from './voice.mjs';
 
 const execFileP = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -31,6 +35,9 @@ export class AgentBridge {
     this.mergeGroups();        // 把 groups.json 里记录的群并入 access.groups
     this.queues = new Map();
     this.stickers = new StickerEngine({ here, config, log });
+    this.voiceCfg = voiceConfig(config);
+    this.voiceDir = path.join(here, 'media', 'voice');
+    this.voiceCounter = 0;
     this.lastGroupReplyAt = 0;   // 全群插话冷却（跨会话共享）
     this.stats = { inbound: 0, outbound: 0, errors: 0, startedAt: Date.now() };
   }
@@ -133,34 +140,17 @@ export class AgentBridge {
     if (evt.scene === 'group') {
       const p = this.groupPolicy(evt.peerId);
       if (!p.enabled) return false;
-      // 说话时机：先看要不要回（@ 必回；没 @ 的按 chatter 配置选择性接话）
-      const c = this.convo(this.key(evt));
-      // 显式关了 chatter、或这个群仍标着 requireMention:true，走原来的「必须 @」老路
-      const chatterOn = this.config.access?.chatter?.enabled !== false;
-      // chatter 关闭 = 每条都回（不掷骰子、不要求 @）；只有显式 requireMention:true 的群才强制 @
-      if (!chatterOn) {
-        if (!evt.text && !(evt.attachments || []).length) return false;   // 空消息仍不回
-        return true;
-      }
-      if (p.requireMention) {
-        if (!evt.mentioned) {
-          if (!evt.text) return false;
-          this.log(`[gate] 群里未 @ 机器人，忽略（群 ${String(evt.peerId).slice(0, 8)}…）`);
-          return false;
-        }
-        return true;
-      }
-      const v = shouldReply(evt, {
-        config: this.config,
-        convo: { ...c, lastReplyAt: this.lastGroupReplyAt },
-      });
-      // 只有真的要回才记账，否则一条消息会被 noteIncoming 重复计入热聊窗口
-      if (!v.reply) {
-        if (v.reason !== 'mentioned') {
-          this.log(`[gate] 不回（${v.reason}）群 ${String(evt.peerId).slice(0, 8)}…`);
-        }
+      // 群里每条都回，只挡纯刷屏（哈哈哈×4 / 666 / ？？？ / 纯表情）
+      const t = String(evt.text || '').trim();
+      const hasAtt = (evt.attachments || []).length > 0;
+      const spam = /^([?.!！？。~～、\s]|哈{4,}|6{3,}|草{3,}|呵{3,})*$/.test(t) && t.length <= 6;
+      const emojiOnly = t.length > 0 && /^[\p{Emoji}\s]+$/u.test(t);
+      if (!t && !hasAtt) return false;
+      if (!hasAtt && (spam || emojiOnly)) {
+        this.log(`[gate] 刷屏/纯表情 → 不回（群 ${String(evt.peerId).slice(0, 8)}…）`);
         return false;
       }
+      const c = this.convo(this.key(evt));
       noteIncoming(c, evt);
       return true;
     }
@@ -199,7 +189,12 @@ export class AgentBridge {
     if (!this.isAllowed(evt)) return;
     this.stats.inbound += 1;
     const k = this.key(evt);
-    const text = (evt.text || '').trim();
+    // 语音消息：QQ 自带转文字（asrText），content 通常是空的
+    let text = (evt.text || '').trim();
+    if (!text && evt.asrText) {
+      text = String(evt.asrText).trim();
+      this.log(`[asr] 语音转文字: ${text}`);
+    }
 
     // 模式切换：精确匹配，不消耗模型调用。任务模式只允许私聊使用
     const MODE_ON = ['任务模式', '/task', '/agent'];
@@ -253,7 +248,17 @@ export class AgentBridge {
     }
     if (!text && !(evt.attachments || []).length) return;
 
-    this.log(`[in] ${evt.scene} user=${evt.userId} peer=${evt.peerId} len=${text.length} att=${(evt.attachments || []).length}`);
+    this.log(`[in] ${evt.scene} user=${evt.userId} peer=${evt.peerId} len=${text.length} att=${(evt.attachments || []).length} ref=${evt.refIdx ? '有' : '无'}`);
+    if (evt.scene === 'group' && this.config.agent?.debugGroup) {
+      try { fs.appendFileSync(path.join(this.here, 'group-raw.log'), JSON.stringify({ at: Date.now(), scene: evt.raw_data?.message_scene }) + '\n'); } catch {}
+    }
+    // 语音消息：把原始结构落盘，方便核对 asr 字段到底在哪
+    if ((evt.attachments || []).some((a) => /voice|silk|amr|audio/i.test(a.contentType || ''))) {
+      try {
+        fs.appendFileSync(path.join(this.here, 'voice-raw.log'), JSON.stringify({ at: Date.now(), data: evt.raw_data }) + '\n');
+        this.log(`[asr] 收到语音，asrText="${evt.asrText || ''}"，原始结构已记到 voice-raw.log`);
+      } catch {}
+    }
 
     const where = evt.scene === 'group' ? 'QQ 群聊' : evt.scene === 'guild' ? 'QQ 频道' : 'QQ 私聊';
     // 附件下载并本地识别；files 留给 sessions 模式直接传给视觉模型
@@ -269,6 +274,8 @@ export class AgentBridge {
 
     const c = this.convo(k);
     c.history.push({ role: 'user', content: userLine });
+    c.lastAnyAt = Date.now();
+    if (c.lastSpeaker !== 'bot') c.lastSpeaker = 'other';
     c.updatedAt = Date.now();
     const keep = (this.config.agent?.historyTurns ?? 20) * 2;
     while (c.history.length > keep) c.history.shift();
@@ -297,6 +304,8 @@ export class AgentBridge {
     c.history.push({ role: 'assistant', content: answer || '' });
     c.updatedAt = Date.now();
     c.lastReplyAt = Date.now();   // 本会话发言时间（冷却用）
+    c.lastSpeaker = 'bot';        // 供群聊判定：上一条谁说的
+    c.lastBotAt = c.lastReplyAt;
     if (evt.scene === 'group') this.lastGroupReplyAt = c.lastReplyAt;  // 全群共享的插话冷却
     c.recentSenders = [];          // 说完话就清空热聊窗口
     this.markDirty();
@@ -318,7 +327,204 @@ export class AgentBridge {
       this.log(`[sticker] 处理失败: ${e.message}`);
     }
 
-    if (outText) await this.sendLong(evt, outText);
+    // 语音：模型用 ♪ 标记（纯语音 / 文字+语音），否则按频率兜底
+    const hasImage = (evt.attachments || []).some((a) => /^image\//.test(a.contentType || ''));
+    const hasVoiceIn = (evt.attachments || []).some((a) => /voice|silk|amr|audio/i.test(a.contentType || ''));
+    let voiceFile = null;
+    let speech = '';
+    try {
+      this.voiceCounter += 1;
+      const parsed = parseVoice(outText);
+      const v = shouldSpeak(text, outText, this.voiceCfg, this.voiceCounter);
+
+      if (parsed.speech) {
+        // 模型主动给了语音内容：文字取 ♪ 前面那段
+        speech = parsed.speech;
+        outText = parsed.text;
+        this.log(`[voice] ${v.reason} 语音="${speech.slice(0, 20)}" 文字="${outText}"`);
+      } else if (hasVoiceIn) {
+        // 对方用说的 → 必须用语音回（纯语音，不重复文字）
+        speech = outText;
+        outText = '';
+        this.log('[voice] 收到语音 → 强制语音回复');
+      } else if (hasImage && this.config.access?.voice?.imageVoice
+                 && (Math.random() < 0.40 || /(笑死|哈哈|离谱|绝了|太可爱|好萌|卧槽|绷不住|乐)/.test(outText))) {
+        // 看图说：40% 概率，或者描述本身带强烈情绪 → 念出来
+        speech = outText;
+        outText = '';
+        this.log('[voice] 看图说 纯语音');
+      } else if (v.want) {
+        // 兜底：整句念出来，文字就不发了（避免重复）
+        speech = outText;
+        outText = '';
+        this.log(`[voice] ${v.reason} 纯语音兜底`);
+      }
+
+      if (speech && !video) {
+        voiceFile = await synthesize(speech, this.voiceCfg, this.voiceDir);
+        this.log(`[voice] ${voiceFile ? '已合成' : '合成失败'}`);
+      }
+    } catch (e) {
+      this.log(`[voice] 处理失败: ${e.message}`);
+    }
+
+    // 视频窗口计数：发过视频后每来一条消息 +1
+    if (c.lastVideo) {
+      c.lastVideo.turns = (c.lastVideo.turns ?? 0) + 1;
+      this.markDirty();
+    }
+    // 视频：只有明确要求才发（体积大，不能随便发）
+    let video = null;
+    let kwUsed = '';
+
+    // ---------- 音乐 ----------
+    let song = null;
+    const askMusic = this.config.access?.music?.enabled !== false && wantsMusic(text);
+    const nextMusic = !askMusic && c.lastSong && wantsNextMusic(text);
+    if (askMusic || nextMusic) {
+      try {
+        const kw = askMusic ? extractSongName(text) : (c.lastSong?.kw || '');
+        const LEAD2 = ['找找', '给你放一首', '等我翻翻', '来'];
+        const lead2 = LEAD2[Math.floor(Math.random() * LEAD2.length)];
+        if (Math.random() < (this.config.access?.music?.leadVoiceChance ?? 0.3)) {
+          const lf = await synthesize(lead2, this.voiceCfg, this.voiceDir).catch(() => null);
+          if (lf) await this.sendMedia(evt, lf, 3); else await this.sendLong(evt, lead2);
+        } else {
+          await this.sendLong(evt, lead2);
+        }
+        song = await findSong(kw, { exclude: c.sentSongs || [] });
+        if (song) {
+          c.sentSongs = [...(c.sentSongs || []), song.id].slice(-20);
+          c.lastSong = { kw, id: song.id, at: Date.now() };
+          this.markDirty();
+          this.log(`[music] ${song.name} - ${song.artist} ${song.mb}MB`);
+        } else {
+          await this.sendLong(evt, '这个没找着能放的 换个试试');
+        }
+      } catch (e) {
+        this.log(`[music] 失败: ${e.message}`);
+      }
+    }
+
+
+    // 「换一个」：沿用 10 分钟内的关键词，跳过已发过的
+    // 发视频后的 5 条消息内，命中关键词就继续给
+    const inVideoWindow = c.lastVideo && (c.lastVideo.turns ?? 99) < 5;
+    if (!video && inVideoWindow
+        && /(换一个|换个|再来一个|再来个|还有吗|别的|下一个|其他|不好看|不喜欢|继续|接着|再找|更多|还要|还有)/.test(text)) {
+      try {
+        const MORE = ['再找一个', '还有个', '再看看', '再翻翻', '还有一个', '继续找'];
+        const say = MORE[Math.floor(Math.random() * MORE.length)];
+        const moreP = this.config.access?.video?.leadVoiceChance ?? 0.3;
+        if (Math.random() < moreP) {
+          const mf = await synthesize(say, this.voiceCfg, this.voiceDir).catch(() => null);
+          if (mf) await this.sendMedia(evt, mf, 3);
+          else await this.sendLong(evt, say);
+        } else {
+          await this.sendLong(evt, say);
+        }
+        video = await findVideo(c.lastVideo.kw, { sent: c.sentVideos || [c.lastVideo.bvid] });
+        if (video) {
+          kwUsed = c.lastVideo.kw;
+          this.log(`[video] 换一个：${video.title}`);
+        } else {
+          await this.sendLong(evt, '这个关键词没别的了 换个词吧');
+        }
+      } catch (e) {
+        this.log(`[video] 换一个失败: ${e.message}`);
+      }
+    }
+
+    const askVideo = this.config.access?.video?.enabled !== false && wantsVideo(text);
+    if (askVideo) {
+      try {
+        // 随机应答，别每次都说同一句；可配置成语音
+        const LEAD = ['等我找找', '找找哈', '稍等', '我看看啊', '等着', '翻翻看'];
+        const lead = LEAD[Math.floor(Math.random() * LEAD.length)];
+        const leadP = this.config.access?.video?.leadVoiceChance ?? 0.3;
+        if (Math.random() < leadP) {
+          const lf = await synthesize(lead, this.voiceCfg, this.voiceDir).catch(() => null);
+          if (lf) {
+            await this.sendMedia(evt, lf, 3);
+            this.log(`[video] 应答用语音: ${lead}`);
+          } else {
+            await this.sendLong(evt, lead);
+          }
+        } else {
+          await this.sendLong(evt, lead);
+        }
+        // 从用户的话里扣出搜索词，没扣到就用回复的关键词
+        const kw = extractVideoKeyword(text) || '搞笑';
+        kwUsed = kw;
+        this.log(`[video] 搜索关键词「${kw}」`);
+        video = await findVideo(kw);
+        this.log(video ? `[video] ${video.title} ${video.mb}MB` : '[video] 没找到合适的');
+      } catch (e) {
+        this.log(`[video] 失败: ${e.message}`);
+      }
+    }
+
+    if (outText && !video && !song) await this.sendLong(evt, outText);
+    // 记住这次视频的关键词和已发的 bvid，方便「换一个」
+    if (video) {
+      const prev = Array.isArray(c.sentVideos) ? c.sentVideos : [];
+      c.sentVideos = [...prev, video.bvid].slice(-20);   // 记住最近 20 个，避免重复
+      c.lastVideo = { kw: kwUsed || '搞笑', bvid: video.bvid, at: Date.now(), turns: 0 };   // turns: 之后又来了几条消息
+      this.markDirty();
+    }
+    if (song) {
+      // ① 卡片（显示歌名/歌手/封面，可点进网易云）
+      try {
+        const { QQApi: QQ } = await import('./qqapi.mjs');
+        const card = QQ.musicCard({
+          title: song.name,
+          desc: song.artist + (song.album ? ` · ${song.album}` : '') + ' · 网易云音乐',
+          img: song.cover,
+          link: `https://music.163.com/song?id=${song.id}`,
+        });
+        const seq = (this._seqOf(evt.msgId) || 0) + 1;
+        this._bumpSeq(evt.msgId, seq);
+        if (evt.scene === 'group') await this.api.sendCardGroup(evt.peerId, card, evt.msgId, seq);
+        else await this.api.sendCardC2C(evt.peerId, card, evt.msgId, seq);
+        this.log('[music] 卡片已发');
+      } catch (e) {
+        this.log(`[music] 卡片失败: ${e.message}`);
+      }
+      // ② 音频（点了就能听）
+      try {
+        await this.sendMedia(evt, song.url, 3);
+        this.log(`[music] 已发送 ${song.name} ${song.artist}`);
+      } catch (e) {
+        this.log(`[music] 发送失败: ${e.message}`);
+      }
+    }
+
+    if (video) {
+      try {
+        // 先报一句标题，让用户知道这是什么视频
+        const line = String(video.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        if (line) {
+          // 标题固定用文字，换着说法
+          const tpl = [`找到个「${line}」`, `这个「${line}」`, `「${line}」这个还行`, `就这个「${line}」`];
+          await this.sendLong(evt, tpl[Math.floor(Math.random() * tpl.length)]);
+        }
+        await this.sendMedia(evt, video.url, 2);   // 2 = 视频
+        this.log(`[video] 已发送 ${video.title}`);
+      } catch (e) {
+        this.log(`[video] 发送失败: ${e.message}`);
+      }
+    }
+
+    if (voiceFile) {
+      try {
+        await this.sendMedia(evt, voiceFile, 3);   // 3 = 录音
+        this.log(`[voice] 已发送 ${Math.round(fs.statSync(voiceFile).size / 1024)}KB`);
+        cleanupVoices(this.voiceDir);
+      } catch (e) {
+        this.log(`[voice] 发送失败: ${e.message}`);
+      }
+    }
+
     if (sticker) {
       try {
         await this.sendMedia(evt, sticker.url, 1);
@@ -400,6 +606,12 @@ export class AgentBridge {
           if (ocr) parts.push(`图中文字：${ocr.slice(0, 800)}`);
           if (barcodes.length) parts.push(`二维码/条形码内容：${barcodes.join(' | ')}`);
           out.push(parts.length ? parts.join('\n') : `一张图片（${a.contentType}），未识别出文字或明显物体`);
+        } else if (/voice|silk|amr|audio/i.test(a.contentType || '')) {
+          // 只用 QQ 自带的语音转文字，不做本地识别
+          const said = a.asrText || '';
+          out.push(said
+            ? `用户发了一条语音，内容是：「${said}」（对方用说的，你也用语音回）`
+            : '用户发了一条语音，但没识别出内容（对方用说的，你也用语音回）');
         } else {
           out.push(`附件 ${path.basename(real)}（${a.contentType || '未知类型'}，${(buf.length / 1024).toFixed(0)}KB），已保存到 ${real}`);
         }
@@ -836,7 +1048,8 @@ export class AgentBridge {
     }
     const bubbles = parts.length > 1 ? parts : [String(text)];
 
-    let seq = 1;
+    // 接着这个 msg_id 已经用过的序号往下排，否则同一条消息的第二句会被 QQ 去重（40054005）
+    let seq = (this._seqOf(evt.msgId) || 0) + 1;
     for (const bubble of bubbles) {
       // 记下已用到的 seq，后面的图片消息从这里继续，避免 40054005 去重
       // 单条过长仍按原逻辑切块
@@ -844,7 +1057,14 @@ export class AgentBridge {
         const payload = this.stripForQQ(chunk);
         try {
           let r;
-          if (evt.scene === 'group') { r = await this.api.sendGroup(evt.peerId, payload, evt.msgId, seq); this._bumpSeq(evt.msgId, seq); seq++; }
+          if (evt.scene === 'group') {
+            // 群里引用回复：让人看得清是在回谁
+            const ref = this.config.access?.groupJudge?.quoteInGroup === false ? '' : (evt.refIdx || '');
+            this.log(`[quote] ref=${ref ? ref.slice(0, 24) + '…' : '(空)'}`);
+            r = await this.api.sendGroup(evt.peerId, payload, evt.msgId, seq, ref);
+            this._bumpSeq(evt.msgId, seq);
+            seq++;
+          }
           else if (evt.scene === 'guild') r = await this.api.sendChannel(evt.peerId, payload, evt.msgId);
           else { r = await this.api.sendC2C(evt.peerId, payload, evt.msgId, seq); this._bumpSeq(evt.msgId, seq); seq++; }
           this.stats.outbound += 1;
