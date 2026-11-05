@@ -11,7 +11,7 @@ const DEFAULT = {
   maxMinutes: 5,       // 超过这么长的不选（避免超 30MB）
   maxMB: 20,           // 超过 20MB 很容易上传超时（QQ 那边下载慢）
   minSeconds: 8,       // 太短的也不要
-  tryCount: 8,         // 最多试几条
+  tryCount: 5,         // 最多试几条
   qn: 32,              // 32=480P，体积小
 };
 
@@ -59,8 +59,7 @@ export async function findVideo(keyword, opts = {}) {
   if (!list.length) return null;
 
   // 2) 逐条试，直到拿到体积合适的 mp4
-  // 多探几条，收集能拿到 mp4 的，再按体积从小到大挑（小的更容易传成功）
-  const found = [];
+  // 逐条试，拿到第一个能用的就返回（快）
   for (const v of list.slice(0, cfg.tryCount)) {
     if (exclude.has(v.bvid) || sentBefore.has(v.bvid)) continue;
     try {
@@ -82,21 +81,18 @@ export async function findVideo(keyword, opts = {}) {
       } catch { mb = 0; }
 
       if (mb && mb > cfg.maxMB) continue;   // 太大，容易超时
-      found.push({
+
+      return {
         url,
         title: String(v.title || '').replace(/<[^>]+>/g, ''),
         duration: v.duration,
         bvid: v.bvid,
         mb: Number(mb.toFixed(1)),
-      });
-      if (found.length >= 3) break;
+      };
     } catch {
       continue;
     }
   }
-  if (!found.length) return null;
-  found.sort((a, b) => (a.mb || 99) - (b.mb || 99));   // 从小到大
-  return found[0];
 }
 
 
