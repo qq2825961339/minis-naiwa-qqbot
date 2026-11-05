@@ -21,16 +21,13 @@ const CHECK_ONLY = args.includes('--check');
 
 // ---- 配置：面板/菜单内容集中在这里 ----
 const PANEL_ITEMS = [
-  { type: 'command', name: '/点歌', desc: '想听啥说啥' },
-  { type: 'command', name: '/找视频', desc: '随便看个视频' },
-  { type: 'command', name: '/换视频', desc: '再来一个' },
+  { type: 'command', name: '/点歌', desc: '点歌 后面可跟歌名' },
+  { type: 'command', name: '/找视频', desc: '找视频 后面可跟关键词' },
+  { type: 'command', name: '/换视频', desc: '换一个视频' },
 ];
 
-const MENU_ITEMS = [
-  { type: 'send_message', name: '点歌', send_message: '/点歌' },
-  { type: 'send_message', name: '找视频', send_message: '/找视频' },
-  { type: 'send_message', name: '换视频', send_message: '/换视频' },
-];
+// 不使用聊天框底部菜单：只用指令面板（打 / 弹出）
+const MENU_ITEMS = [];
 
 function loadCreds() {
   const p = path.join(HERE, 'credentials.json');
@@ -78,8 +75,7 @@ async function ensureMenu(api) {
     cur = await api.request('GET', '/v2/menu');
   } catch {}
   const items = cur?.menu?.items || [];
-  const ok = items.length === MENU_ITEMS.length
-    && items.every((x, i) => x.name === MENU_ITEMS[i].name && x.send_message === MENU_ITEMS[i].send_message);
+  const ok = items.length === 0;          // 目标是空菜单
   if (ok && !FORCE) return { changed: false, version: cur?.version };
   if (CHECK_ONLY) return { changed: true, need: 'menu' };
   const r = await api.request('PUT', '/v2/menu', { body: { menu: { items: MENU_ITEMS } } });
@@ -141,10 +137,10 @@ async function main() {
   // ---- 自定义菜单（仅单聊）----
   const m = await ensureMenu(api);
   if (m.changed) {
-    console.log(`✅ 自定义菜单已更新（version ${m.version ?? '?'}）`);
+    console.log(`✅ 已清空聊天框底部菜单（version ${m.version ?? '?'}）`);
     changed++;
   } else {
-    console.log('✅ 自定义菜单已存在且一致');
+    console.log('✅ 菜单已为空');
   }
 
   console.log(changed ? `\n完成，改动 ${changed} 处` : '\n全部就绪，无需改动');
