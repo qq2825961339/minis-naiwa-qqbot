@@ -12,7 +12,23 @@
     "defaultRequireMention": false,
     "allowFrom": [],
     "blockFrom": [],
-    "groups": {}
+    "groups": {},
+    "chatter": {
+      "enabled": false,
+      "groupReplyRate": 0.25,
+      "groupIdleReplyRate": 0.65,
+      "burstCooldownMs": 45000,
+      "busyThreshold": 4,
+      "keepQuietOnTopics": []
+    },
+    "stickers": {
+      "enabled": true,
+      "minGapReplies": 0,
+      "pickFrom": 5,
+      "maxSizeKB": 400,
+      "groupOnlyWhenMentioned": false,
+      "autoFallback": true
+    }
   },
   "groupIsolation": "group",
   "limit": {
