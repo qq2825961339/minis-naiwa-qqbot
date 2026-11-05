@@ -17,12 +17,16 @@ const DEFAULT = {
 };
 
 /** 用户是不是在点歌 */
-const ASK_RE = /(放首|来首|听首|点首|唱首|放一首|来一首|听一首|放个歌|来首歌|听首歌|点歌|听音乐|放音乐|放点音乐|来点音乐)/;
+// 只认指令：点歌 / 点歌 XXX / 点一首 XXX（开头必须是指令，后面只能是歌名）
+const ASK_RE = /^\/点歌$/;
+const ASK_RE2 = /^\/点一首\s*[^\s，。,!！？?]{1,16}$/;
+const ASK_RE3 = /^\/点歌\s+[^\s，。,!！？?]{1,16}$/;   // /点歌 逆战
 /** 「换一首」 */
-const NEXT_RE = /(换一首|换歌|下一首|再放一首|还有吗|听点别的|换个歌)/;
+const NEXT_RE = /(?!)/;   // 不提供换歌：只能通过「点歌」重新点
 
 export function wantsMusic(text) {
-  return ASK_RE.test(String(text || ''));
+  const t = String(text || '').trim();
+  return ASK_RE.test(t) || ASK_RE2.test(t) || ASK_RE3.test(t);
 }
 export function wantsNextMusic(text) {
   return NEXT_RE.test(String(text || ''));
@@ -30,17 +34,11 @@ export function wantsNextMusic(text) {
 
 /** 从「放首晴天」里抠歌名 */
 export function extractSongName(text) {
-  const t = String(text || '');
-  const m = t.match(/(?:放首|放一首|来首|来一首|听首|听一首|点首|唱首|放个|来个)\s*([^\s，。,!！？?的]{1,16})/);
-  if (m && m[1]) {
-    // 「放首歌」「来首音乐」这类没具体歌名 → 返回空，走随机
-    const kw = m[1].replace(/首歌|首音乐|音乐|歌/g, '').trim();
-    if (!kw) return '';
-    return kw;
-  }
-  // 兜底：去掉动词和称呼后剩下的
-  const cleaned = t.replace(/奶蛙|你|我|吧|呢|啊|呀|放首|来首|听首|点首|唱首|放一首|来一首|听一首|放个歌|来首歌|听首歌|点歌|听音乐|放音乐|放点音乐|来点音乐|首歌|音乐|歌/g, '').trim();
-  return cleaned.slice(0, 16);
+  const t = String(text || '').trim();
+  // 「点歌」后面跟的就是歌名，没跟就是随机
+  const m = t.match(/^\/(?:点歌|点一首)\s*([^\s，。,!！？?]{1,16})/);
+  if (m && m[1]) return m[1].replace(/首歌|音乐/g, '').trim();
+  return '';
 }
 
 /**
