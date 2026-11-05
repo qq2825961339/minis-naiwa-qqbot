@@ -236,6 +236,14 @@ export class AgentBridge {
       return this.sendLong(evt, '🧹 已开启新对话。');
     }
     if (text === '/ping') return this.sendLong(evt, '🏓 pong');
+    if (text === '/菜单' || text === '/menu' || text === '/帮助' || text === '/help') {
+      try {
+        await this.sendMenu(evt);
+        return;
+      } catch (e) {
+        this.log(`[menu] 卡片失败，退回文字: ${e.message}`);
+      }
+    }
     if (text === '/help') {
       const c = this.convo(k);
       return this.sendLong(evt, [
@@ -388,10 +396,6 @@ export class AgentBridge {
     }
 
     // 视频窗口计数：发过视频后每来一条消息 +1
-    if (c.lastVideo) {
-      c.lastVideo.turns = (c.lastVideo.turns ?? 0) + 1;
-      this.markDirty();
-    }
     // 视频：只有明确要求才发（体积大，不能随便发）
 
     // ---------- 音乐 ----------
@@ -425,9 +429,9 @@ export class AgentBridge {
 
     // 「换一个」：沿用 10 分钟内的关键词，跳过已发过的
     // 发视频后的 5 条消息内，命中关键词就继续给
-    const inVideoWindow = c.lastVideo && (c.lastVideo.turns ?? 99) < 5;
-    if (!video && inVideoWindow
-        && /(换一个|换个|再来一个|再来个|还有吗|别的|下一个|其他|不好看|不喜欢|继续|接着|再找|更多|还要|还有)/.test(text)) {
+    // /换视频 只要最近发过视频就能换，不再限制条数
+    if (!video && c.lastVideo
+        && /^(换视频|换个视频)$/.test(text)) {
       try {
         const MORE = ['再找一个', '还有个', '再看看', '再翻翻', '还有一个', '继续找'];
         const say = MORE[Math.floor(Math.random() * MORE.length)];
@@ -485,7 +489,7 @@ export class AgentBridge {
     if (video) {
       const prev = Array.isArray(c.sentVideos) ? c.sentVideos : [];
       c.sentVideos = [...prev, video.bvid].slice(-20);   // 记住最近 20 个，避免重复
-      c.lastVideo = { kw: kwUsed || '搞笑', bvid: video.bvid, at: Date.now(), turns: 0 };   // turns: 之后又来了几条消息
+      c.lastVideo = { kw: kwUsed || '搞笑', bvid: video.bvid, at: Date.now() };
       this.markDirty();
     }
     if (song) {
@@ -736,6 +740,32 @@ export class AgentBridge {
     } finally {
       try { fs.unlinkSync(inputFile); } catch {}
     }
+  }
+
+  /** 发菜单卡片（msg_type=8 图文卡片） */
+  async sendMenu(evt) {
+    const card = {
+      type: 'tuwen',
+      content: {
+        title: '奶蛙 · 我能干啥',
+        description: [
+          '🎵 点歌：放首歌 / 放首逆战 / 换一首',
+          '🎬 视频：来个猫的视频 / 换一个',
+          '🔊 语音：说句话 / 发个语音',
+          '🖼 看图：直接把图发来',
+          '🎤 发语音：直接说，我会用语音回',
+          '😄 表情：我心情到了自己发',
+          '📖 详细说明：说「使用手册」',
+        ].join('\n'),
+        url: 'https://github.com/qq2825961339/minis-naiwa-qqbot/blob/main/%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C.md',
+        pic_url: 'https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg',
+      },
+    };
+    const seq = (this._seqOf(evt.msgId) || 0) + 1;
+    this._bumpSeq(evt.msgId, seq);
+    if (evt.scene === 'group') await this.api.sendCardGroup(evt.peerId, card, evt.msgId, seq);
+    else await this.api.sendCardC2C(evt.peerId, card, evt.msgId, seq);
+    this.log('[menu] 菜单卡片已发');
   }
 
   /** 统一图片格式：GIF 取第一帧转 JPG，其他原样返回；返回 { file, mime } */
