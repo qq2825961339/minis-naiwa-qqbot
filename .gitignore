@@ -26,5 +26,4 @@ node_modules/
 persona/sticker-cache/
 
 
-# 离线依赖包（体积大，单独分发）
-vendor/*.tar.gz
+# 离线依赖包体积大，但需要随技能分发，保留在仓库
