@@ -15,5 +15,10 @@ if need_bind; then
   echo "✅ 绑定完成，开始启动"
 fi
 
+# 确保指令面板 / 自定义菜单已配置（换账号后旧面板不会跟过来）
+if [ -f scripts/ensure-panels.mjs ]; then
+  node scripts/ensure-panels.mjs || echo "⚠️ 面板配置失败，可稍后手动执行：node scripts/ensure-panels.mjs"
+fi
+
 echo "🚀 启动奶蛙…"
 exec ./keepalive.sh run forever
