@@ -19,7 +19,6 @@ files() {
     ! -name '.manifest.sha256' ! -name '.manifest.old' ! -name 'bind.html' \
     ! -name 'qr.png' ! -name '.bind.out' ! -name '*.tmp' \
     ! -name '.tmp-input.json' ! -name '.probe*.mjs' ! -name '.whoami.mjs' \
-    ! -name 'keepalive.log' ! -name 'reconnect.log' \
   | sort
 }
 
