@@ -205,7 +205,7 @@ node scripts/ensure-panels.mjs --force  # 全部删除重建
 ```sh
 cd /var/minis/skills/minis-naiwa-qqbot
 ./install.sh     # 解压离线依赖（vendor/ 里带了 node_modules 和 edge-tts，不用联网）
-./start.sh       # 没绑定就自动出二维码，扫完自动上线并保活
+./start.sh       # 没绑定就自动出二维码，扫完自动上线
 ```
 
 ### `start.sh` 的行为
@@ -213,10 +213,9 @@ cd /var/minis/skills/minis-naiwa-qqbot
 1. 检查 `credentials.json` 是否存在 **且有效**（跑一次 `run.mjs --once` 验证）
 2. 无效 → 调 `bind.mjs --png` **在当前任务里生成二维码并阻塞等待扫码**
 3. 扫码成功 → `credentials.json` 自动写入
-4. 直接 `exec ./keepalive.sh run forever` 上线并保活
+4. 启动机器人（前台后台均可，见「运行方式」）
 
-**不要手动分步执行**（先 bind、再 run、再保活）。`start.sh` 已经把这三步串成一条线，
-扫码完自动接管，中途不会掉出任务。
+`start.sh` 把「扫码 → 启动」串成一条线，中途不会掉出任务。
 
 ### 离线依赖
 
@@ -226,139 +225,6 @@ cd /var/minis/skills/minis-naiwa-qqbot
 | `vendor/py-deps.tar.gz` | `edge_tts` + `tabulate`，约 134KB，解到 python 的 site-packages |
 
 `install.sh` 会先试离线包，没有再走 `npm install` / `pip install`。
-
-## 保活（利用 Minis 的 Agent 任务特性）
-
-`background.enhanced` / `locationTracking` 保的是「**Minis 正在执行的一轮 Agent 任务**」。
-所以只要**让一轮任务不结束**，App 就有后台时间片，`node run.mjs` 作为这一轮的子进程随之存活。
-
-> 保活是收尾的**默认动作**，不是可选项，任何时候都不需要用户确认。
-
-### ⚠️ 铁律：先拉起奶蛙，再单独发一个保活任务
-
-**奶蛙进程 和 保活 必须分成两个独立任务，不能放在同一个 shell 里。**
-
-原因：保活那条命令会一直挂着不返回。如果在同一个任务里先启动奶蛙再保活，那么保活一旦被杀（或这一轮被停止），**奶蛙也会被一起带走**。
-
-正确顺序：
-
-**第 1 步：先把奶蛙跑起来（独立任务，立即返回）**
-
-```sh
-cd /var/minis/skills/minis-naiwa-qqbot && rm -f .run.pid && setsid sh -c 'node run.mjs > /dev/null 2>&1' < /dev/null > /dev/null 2>&1 &
-sleep 15 && ./keepalive.sh status
-```
-
-确认日志出现 `✅ 机器人已上线`。
-
-**第 2 步：另起一个任务发保活（这一步会挂住不返回）**
-
-```sh
-cd /var/minis/skills/minis-naiwa-qqbot && ./keepalive.sh run forever
-```
-
-不加 `&`、不加 `setsid`、不加 `timeout`。
-
-### 两条禁令
-
-1. ❌ **不许问**「要不要开启保活」——直接做
-2. ❌ **不许把 `node run.mjs` 和 `keepalive.sh` 写在同一条命令里**
-
-（`keepalive.sh` 内部会清理旧的 run.mjs 再重新拉起，所以第 1 步主要是**让奶蛙先上线、能立即验证**；保活任务负责长期守护。两步分开，任何一步挂了另外一步不受影响。）
-
-### 为什么要分开
-
-| 写法 | 结果 |
-|---|---|
-| 同一条命令里先 run.mjs 再保活 | 保活被杀 → run.mjs 一起没了 |
-| **先独立启动，再单独保活** | run.mjs 先跑起来，保活只负责守护 |
-
-### ⚠️ 保活的根本局限（必须先说清楚）
-
-保活靠的是「**本轮 Agent 任务不结束**」，所以：
-
-| 情况 | 结果 |
-|---|---|
-| 任务一直挂着 | 进程有保护，App 不回收 ✅ |
-| **用户点「停止」** | **整棵进程树被杀，保活和 run.mjs 一起消失** ❌ |
-| App 被系统杀死 | 一起消失 ❌ |
-| 用 `setsid` 脱离 | PPID=1，停止杀不掉，但**没有任务保护，照样冻结** ❌ |
-
-**「用户点停止后进程仍然存活」做不到**——停止必然带走整棵进程树。
-
-### 保活期间的自检（任务不会结束，但进程会掉）
-
-保活不等于永不掉线。`run.mjs` 崩了 `keepalive.sh` 会 5 秒重启，但整个 iSH 被系统回收时仍然会断。
-
-所以**每一轮被唤起时，第一件事就是查进程**：
-
-```sh
-ps -o pid,ppid,args | grep -E '[k]eepalive|[r]un.mjs'
-```
-
-| 看到的 | 判断 | 动作 |
-|---|---|---|
-| `keepalive.sh` + PPID 不是 1 | 真保活 | 正常，继续 |
-| 只有 `run.mjs`，没有 `keepalive.sh` | 临时进程，随时会掉 | 收尾时必须转常驻 |
-| 什么都没有 | 已掉线 | 重新启动 → 验证上线 → 收尾保活 |
-| `keepalive.sh` 的 PPID = 1 | 伪保活（被 init 收养） | 无效，收尾时重发常驻 |
-
-**检查完如果发现掉线，重新拉起并再次保活，不能只报告「掉线了」就结束本轮。**
-
-### 正确启动方式
-
-```sh
-cd /var/minis/skills/minis-naiwa-qqbot
-./keepalive.sh run forever
-```
-
-**不加 `&`，不用 `setsid`。** 这一轮 Agent 任务必须一直挂着（`keepalive.sh` 的 PPID 是当前任务），
-Minis 才会当作"任务进行中"持续给后台时间片。
-
-### 错误做法（务必避免）
-
-```sh
-setsid ./keepalive.sh run forever < /dev/null > /dev/null 2>&1 &   # ❌ 这不是保活
-```
-
-`setsid ... &` 让 `shell_execute` 立刻返回，那一轮任务随即结束，进程 PPID=1 被 init 收养。
-**没有任何任务在保它**，App 一挂起照样冻结。它只是"不退出"，不是"保活"。
-
-判断方法：
-
-```sh
-ps -o pid,ppid,args | grep '[k]eepalive'
-# PPID = 当前 Agent 任务 → 真保活
-# PPID = 1              → 只是后台进程，无保护
-```
-
-### 启动前的告知义务
-
-发出保活命令后，**这一轮对话不会再返回**——用户要再说话必须先点「停止」。
-所以启动前要先把该交代的事说完，并明确告诉用户这个后果。
-
-用户点「停止」会带走整棵进程树，保活随即失效。
-
-`keepalive.sh` 自身行为：把 `run.mjs` 作为前台子进程跑，崩了 5 秒后自动重启，`forever` 表示不设时限。
-
-| 事项 | 说明 |
-|---|---|
-| stdout | **永远不要接管道**，否则 EPIPE 杀进程（已修，但启动命令也要注意） |
-| 检查 | `ps -o pid,ppid,args \| grep -E '[k]eepalive\|run\.mjs'` |
-| 失效后 | 重新上线时按触发规则自动保活 |
-
-
-
-
-QQ 里直接发：
-
-| 指令 | 作用 |
-|------|------|
-| `/new`、`/reset` | 清空当前会话历史，开启新对话 |
-| `/ping` | 探活 |
-| `/help` | 指令帮助 |
-
-其他任何文本都会交给 Agent。
 
 ## 配置说明（config.json）
 
@@ -442,7 +308,6 @@ minis-naiwa-qqbot/
 
 ## 已知限制
 
-- **进程存活（重点）**：`nohup` 起的进程会随 Minis 被挂起而暂停。**可行的保活做法**见下方「保活」章节；绝对 7×24 仍需上云。
 - **EPIPE 崩溃**：父 shell 退出或管道断开后，`console.log` 写 stdout 会抛 `EPIPE → errno -32` 直接杀死进程。`run.mjs` 已对 `process.stdout/stderr` 挂 error 处理，并给日志流加 error 兜底。**任何启动方式都不要让 `run.mjs` 的 stdout 接管道**，必须重定向到文件或 `/dev/null`。
 - **消息重放**：QQ 对丢 ACK 的消息会重推，同一 `msg_id` 可能来两次；目前未按 `msg_id` 去重（仅在事件带 ttl<0 时丢弃），如需严格去重可自行加 LRU。
 - **富媒体收**：`cli` 模式下附件会自动下载到 `media/`，图片用 `apple-vision analyze` 做 OCR + 分类 + 码识别，结果以文字形式送给模型（纯文本模型也能"看图"）；识别能力受 Vision 框架限制，只能给出类别/文字，无法理解画面细节。
