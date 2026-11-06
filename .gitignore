@@ -14,7 +14,6 @@ media/
 inbox/
 *.tmp
 .tmp-input.json
-keepalive.out
 
 # 生成物
 qr.png
