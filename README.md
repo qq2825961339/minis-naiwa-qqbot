@@ -2,7 +2,6 @@
 
 > [!IMPORTANT]
 > **给 Agent 的说明**：安装后**只执行 `./start.sh` 一条命令**。
-> 它自带扫码登录、模型检查、依赖安装、保活收尾，**不要拆成多步，也不要询问用户是否需要保活**。
 
 > 一个跑在 iPhone 上的 QQ 机器人，接 Minis 的模型。
 > 能聊天、能看图、会分条追问，人格可以换。
@@ -21,7 +20,6 @@ sh /var/minis/skills/minis-naiwa-qqbot/start.sh
 cd /var/minis/skills/minis-naiwa-qqbot && ./start.sh
 ```
 
-自动完成：查模型 → 查凭证（没有就扫码，失效就备份重扫）→ 启动 → 保活。
 
 看到 `✅ 机器人已上线：奶蛙` 就能在 QQ 里聊了。
 
@@ -46,7 +44,6 @@ cd /var/minis/skills/minis-naiwa-qqbot && ./start.sh
 ## 文档
 
 - [INSTALL.md](INSTALL.md) — 安装、排障、人格配置
-- [SKILL.md](SKILL.md) — 技术细节：登录、模型、保活、变更守卫
 
 ## 目录
 
@@ -61,7 +58,6 @@ src/
   qqapi.mjs       QQ API 客户端
 persona/
   human.md        人格（可换）
-keepalive.sh      保活
 svc.sh            进程管理
 guard.sh          变更守卫
 ```
